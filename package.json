@@ -1,0 +1,43 @@
+{
+  "name": "moviesdrive-stremio-addon",
+  "version": "1.0.0",
+  "description": "Stremio addon for MoviesDrive provider",
+  "main": "src/index.js",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test",
+    "lint": "eslint src/",
+    "format": "prettier --write src/"
+  },
+  "keywords": [
+    "stremio",
+    "addon",
+    "moviesdrive",
+    "streaming",
+    "movies",
+    "tv-series"
+  ],
+  "author": "MoviesDrive Addon Team",
+  "license": "MIT",
+  "dependencies": {
+    "stremio-addon-sdk": "^1.2.0",
+    "axios": "^1.7.0",
+    "jsdom": "^24.0.0",
+    "cheerio": "^1.0.0-rc.12",
+    "got": "^14.0.0",
+    "redis": "^4.6.0",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "eslint": "^8.54.0",
+    "prettier": "^3.1.0",
+    "node-test": "^1.0.0"
+  }
+}

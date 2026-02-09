@@ -1,0 +1,78 @@
+{
+  "id": "com.moviesdrive.stremio",
+  "version": "1.0.0",
+  "name": "MoviesDrive",
+  "description": "Stream movies and TV shows from MoviesDrive provider with multiple quality options (1080p, 720p, 480p)",
+  "types": [
+    "movie",
+    "series"
+  ],
+  "catalogs": [
+    {
+      "type": "movie",
+      "id": "moviesdrive.movies",
+      "name": "MoviesDrive Movies",
+      "extra": [
+        {
+          "name": "search",
+          "isRequired": false
+        }
+      ]
+    },
+    {
+      "type": "series",
+      "id": "moviesdrive.series",
+      "name": "MoviesDrive Series",
+      "extra": [
+        {
+          "name": "search",
+          "isRequired": false
+        }
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "name": "catalog",
+      "types": [
+        "movie",
+        "series"
+      ],
+      "idPrefixes": [
+        "tt"
+      ]
+    },
+    {
+      "name": "stream",
+      "types": [
+        "movie",
+        "series"
+      ],
+      "idPrefixes": [
+        "tt"
+      ]
+    },
+    {
+      "name": "subtitles",
+      "types": [
+        "movie",
+        "series"
+      ],
+      "idPrefixes": [
+        "tt"
+      ]
+    }
+  ],
+  "icon": "https://raw.githubusercontent.com/SaurabhKaperwan/Utils/main/moviesdrive-icon.png",
+  "background": "https://raw.githubusercontent.com/SaurabhKaperwan/Utils/main/background.jpg",
+  "logo": "https://raw.githubusercontent.com/SaurabhKaperwan/Utils/main/moviesdrive-logo.png",
+  "contactEmail": "support@moviesdrive.addon",
+  "behaviorHints": {
+    "configurable": false,
+    "configurationRequired": false,
+    "p2p": false,
+    "adult": false,
+    "defaultVideoOption": "1080p",
+    "bingeGroup": "moviesdrive"
+  }
+}
