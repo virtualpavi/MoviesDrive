@@ -22,7 +22,7 @@ class HttpClient {
         'Accept-Encoding': 'gzip, deflate',
         'Accept-Language': 'en-US,en;q=0.9',
       },
-      maxRedirects: 0, // Don't follow redirects automatically - let LinkResolver handle them
+      maxRedirects: 10, // Follow redirects automatically
       validateStatus: () => true, // Don't throw on any status
     });
 
@@ -43,7 +43,7 @@ class HttpClient {
       const response = await this.client.get(url, {
         ...options,
         timeout: this.timeout,
-        maxRedirects: 0, // Don't follow redirects - let LinkResolver handle them manually
+        maxRedirects: 10, // Follow redirects automatically
       });
       
       // Get the final URL after all redirects

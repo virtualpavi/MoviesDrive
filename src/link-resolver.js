@@ -20,149 +20,29 @@ class LinkResolver {
 
   /**
    * Resolve a wrapper URL through redirect chain to get final streaming URL
-   * IMPROVED: Extracts links at each step, stops when links found
+   * SIMPLIFIED: Axios now follows redirects automatically, just extract from final page
    */
   async resolveWrapperUrl(wrapperUrl) {
     try {
       console.log(`[LinkResolver] Resolving wrapper: ${wrapperUrl.substring(0, 60)}...`);
       
-      // Start with initial URL
-      let currentUrl = wrapperUrl;
-      let currentPage = null;
-      let redirectCount = 0;
-      const maxRedirects = 10;
+      // Fetch URL - axios will follow all redirects automatically
+      const response = await this.http.get(wrapperUrl, { timeout: 20000 });
+      const finalPage = response.text;
+      const finalUrl = response.url || response.finalUrl || wrapperUrl;
       
-      while (redirectCount < maxRedirects) {
-        console.log(`[LinkResolver] Step ${redirectCount + 1}: Fetching ${currentUrl.substring(0, 80)}...`);
-        
-        // Fetch current URL
-        const response = await this.http.get(currentUrl, { timeout: 20000 });
-        currentPage = response.text;
-        const fetchedUrl = response.url || response.finalUrl || currentUrl;
-        
-        console.log(`[LinkResolver] Fetched: ${fetchedUrl.substring(0, 80)} (Status: ${response.status})`);
-        
-        // === STEP 1: Try to extract streaming links from CURRENT page ===
-        console.log(`[LinkResolver] Checking for streaming links on current page...`);
-        const streams = await this.extractStreamsFromPage(currentPage, fetchedUrl);
-        
-        if (streams.length > 0) {
-          console.log(`[LinkResolver] ✓ Found ${streams.length} stream(s) at step ${redirectCount + 1}, stopping redirect chain`);
-          return streams;
-        }
-        
-        // === STEP 2: Check for redirects if no links found ===
-        let redirectUrl = null;
-        let redirectType = null;
-        
-        // Check for HTTP redirect (3xx status)
-        if (response.status >= 300 && response.status < 400) {
-          const location = response.headers?.location || response.headers?.Location;
-          if (location) {
-            redirectUrl = location.startsWith('http') ? location : new URL(location, fetchedUrl).href;
-            redirectType = `HTTP ${response.status}`;
-          }
-        }
-        
-        // Check for meta refresh redirect
-        if (!redirectUrl) {
-          const metaRefreshMatch = currentPage.match(/<meta[^>]*?http-equiv=["']refresh["'][^>]*?content=["']([^"']*)['"]/i);
-          if (metaRefreshMatch) {
-            const redirectContent = metaRefreshMatch[1];
-            const urlMatch = redirectContent.match(/url=([^\s;]+)/i);
-            if (urlMatch) {
-              redirectUrl = urlMatch[1].replace(/['"]/g, '');
-              if (!redirectUrl.startsWith('http')) {
-                redirectUrl = new URL(redirectUrl, fetchedUrl).href;
-              }
-              redirectType = 'meta refresh';
-            }
-          }
-        }
-        
-        // Check for JavaScript window.location redirect
-        if (!redirectUrl) {
-          const jsRedirectMatch = currentPage.match(/window\.location\s*=\s*['"]([^'"]+)['"]/i);
-          if (jsRedirectMatch) {
-            redirectUrl = jsRedirectMatch[1];
-            if (!redirectUrl.startsWith('http')) {
-              redirectUrl = new URL(redirectUrl, fetchedUrl).href;
-            }
-            redirectType = 'JS window.location';
-          }
-        }
-        
-        // Check for JavaScript window.location.href with variable
-        if (!redirectUrl) {
-          const jsHrefVarMatch = currentPage.match(/window\.location\.href\s*=\s*url\s*;/i);
-          if (jsHrefVarMatch) {
-            const urlVarMatch = currentPage.match(/var\s+url\s*=\s*['"]([^'"]+)['"]/i) || 
-                               currentPage.match(/let\s+url\s*=\s*['"]([^'"]+)['"]/i) ||
-                               currentPage.match(/const\s+url\s*=\s*['"]([^'"]+)['"]/i) ||
-                               currentPage.match(/url\s*=\s*['"]([^'"]+)['"]/i);
-            if (urlVarMatch) {
-              redirectUrl = urlVarMatch[1];
-              if (!redirectUrl.startsWith('http')) {
-                redirectUrl = new URL(redirectUrl, fetchedUrl).href;
-              }
-              redirectType = 'JS window.location.href (var)';
-            }
-          }
-        }
-        
-        // Check for JavaScript window.location.href direct
-        if (!redirectUrl) {
-          const jsHrefMatch = currentPage.match(/window\.location\.href\s*=\s*['"]([^'"]+)['"]/i);
-          if (jsHrefMatch) {
-            redirectUrl = jsHrefMatch[1];
-            if (!redirectUrl.startsWith('http')) {
-              redirectUrl = new URL(redirectUrl, fetchedUrl).href;
-            }
-            redirectType = 'JS window.location.href';
-          }
-        }
-        
-        // Check for JavaScript window.location.replace
-        if (!redirectUrl) {
-          const jsReplaceMatch = currentPage.match(/window\.location\.replace\s*\(\s*['"]([^'"]+)['"]\s*\)/i);
-          if (jsReplaceMatch) {
-            redirectUrl = jsReplaceMatch[1];
-            if (!redirectUrl.startsWith('http')) {
-              redirectUrl = new URL(redirectUrl, fetchedUrl).href;
-            }
-            redirectType = 'JS window.location.replace';
-          }
-        }
-        
-        // No redirect found, we're at the final page
-        if (!redirectUrl) {
-          console.log(`[LinkResolver] No more redirects found at step ${redirectCount + 1}`);
-          break;
-        }
-        
-        // Check if redirect URL is the same as current (loop detection)
-        if (redirectUrl === currentUrl) {
-          console.log(`[LinkResolver] Redirect loop detected, stopping`);
-          break;
-        }
-        
-        console.log(`[LinkResolver] Found ${redirectType} redirect to: ${redirectUrl.substring(0, 80)}`);
-        currentUrl = redirectUrl;
-        redirectCount++;
-      }
+      console.log(`[LinkResolver] Final URL after redirects: ${finalUrl.substring(0, 80)}`);
       
-      // === FINAL STEP: Try to extract from final page ===
-      console.log(`[LinkResolver] Reached final URL after ${redirectCount} step(s): ${currentUrl.substring(0, 80)}`);
+      // Extract streaming links from final page
+      const streams = await this.extractStreamsFromPage(finalPage, finalUrl);
       
-      const finalStreams = await this.extractStreamsFromPage(currentPage, currentUrl);
-      
-      if (finalStreams.length > 0) {
-        console.log(`[LinkResolver] ✓ Found ${finalStreams.length} stream(s) from final page`);
-        return finalStreams;
+      if (streams.length > 0) {
+        console.log(`[LinkResolver] ✓ Found ${streams.length} stream(s) from final page`);
+        return streams;
       }
       
       // === FALLBACK: Return wrapper URL ===
-      console.warn(`[LinkResolver] ✗ No streaming links found after ${redirectCount} step(s), using wrapper as fallback`);
+      console.warn(`[LinkResolver] ✗ No streaming links found, using wrapper as fallback`);
       return [{
         url: wrapperUrl,
         quality: 1080,
@@ -180,6 +60,7 @@ class LinkResolver {
       }];
     }
   }
+
 
   /**
    * Extract streaming URLs from page HTML
