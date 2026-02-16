@@ -16,9 +16,10 @@ if (args.length === 0) {
   console.error('Usage: node debug-urls.js [WRAPPER_URL]');
   console.error('');
   console.error('Example:');
-  console.error('  node debug-urls.js "https://hubcloud.foo/drive/i2xyn5f3te2zxnf"');
+  console.error('  node debug-urls.js "https://gamerxyt.com/hubcloud.php?host=hubcloud&id=czdbiwo5e5arkdd&token=NzJQbUc3enI5aWxYdmw2a2hLbnBHbE40UFhTZDVRMzNCQWVaWnMxVStqMD0="');
   console.error('');
   console.error('Test wrapper URLs:');
+  console.error('  - https://gamerxyt.com/hubcloud.php?host=hubcloud&id=czdbiwo5e5arkdd&token=...');
   console.error('  - https://hubcloud.foo/drive/i2xyn5f3te2zxnf');
   console.error('  - https://gdflix.dev/file/ZbyVRCVQAkOmGOW');
   console.error('  - https://pixeldrain.dev/u/K6HkSWDx');
@@ -45,7 +46,7 @@ async function debugUrlResolution() {
     console.log('');
 
     // Step 2: Fetch the URL and check response
-    console.log('📋 Step 2: Fetch URL');
+    console.log('📋 Step 2: Fetch URL and follow redirects');
     try {
       const response = await http.get(testUrl, { timeout: 20000 });
       console.log(`  Status: ${response.status}`);
@@ -74,7 +75,7 @@ async function debugUrlResolution() {
       console.log('');
 
       // Step 4: Extract links from the page
-      console.log('📋 Step 4: Extract streaming links');
+      console.log('📋 Step 4: Extract streaming links from page');
       const streams = await linkResolver.extractStreamsFromPage(response.text, response.url || testUrl);
       
       if (streams.length > 0) {
@@ -89,7 +90,7 @@ async function debugUrlResolution() {
       console.log('');
 
       // Step 5: Try full resolution
-      console.log('📋 Step 5: Full URL resolution');
+      console.log('📋 Step 5: Full URL resolution (with redirect chain following)');
       const resolved = await linkResolver.resolveWrapperUrl(testUrl);
       console.log(`  Found ${resolved.length} stream(s):`);
       resolved.forEach((s, i) => {
@@ -109,10 +110,12 @@ async function debugUrlResolution() {
 
     } catch (error) {
       console.error(`  ✗ Error fetching URL: ${error.message}`);
+      console.error(error.stack);
     }
 
   } catch (error) {
     console.error(`Error: ${error.message}`);
+    console.error(error.stack);
   }
 
   console.log('');

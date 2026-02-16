@@ -75,805 +75,905 @@ class MoviesDriveScraper {
   }
 
   /**
-   * Search for content by IMDB ID
-   * Matches the Kotlin: invokeMoviesdrive search logic
-   * @param {string} imdbId - IMDB ID (e.g., 'tt1234567')
-   * @returns {Promise<Object>} Search results document
+   * Extract quality from plain text (e.g. 480p/720p/1080p/4K)
+   * @param {string} text
+   * @returns {number}
    */
-  async searchAndGetDocument(imdbId) {
-    if (!imdbId || !imdbId.startsWith('tt')) {
-      throw new Error('Invalid IMDB ID format');
+  extractQualityFromText(text) {
+    const qualityMap = {
+      '4k': 2160,
+      '2160p': 2160,
+      '1080p': 1080,
+      '1080': 1080,
+      '720p': 720,
+      '720': 720,
+      '480p': 480,
+      '480': 480,
+      '360p': 360,
+      '360': 360,
+    };
+
+    const textLower = String(text || '').toLowerCase();
+    for (const [key, value] of Object.entries(qualityMap)) {
+      if (textLower.includes(key)) {
+        return value;
+      }
     }
 
-    // Check cache first
-    const cacheKey = `moviesdrive-${imdbId}`;
-    const cached = this.cache.get(cacheKey);
-    if (cached) {
-      console.debug(`[MoviesDrive] Using cached document for ${imdbId}`);
-      return cached;
-    }
+    const match = textLower.match(/(\d{3,4})p/);
+    return match ? parseInt(match[1], 10) : 720;
+  }
 
-    try {
-      // Step 1: Search using the API
-      const searchUrl = `${this.apiUrl}/searchapi.php?q=${imdbId}`;
-      console.debug(`[MoviesDrive] Searching at: ${searchUrl}`);
-      
-      const response = await this.http.get(searchUrl);
-      
-      // Safely parse the response
-      let data;
+  /**
+   * Parse movie resolution blocks from paired h5 tags:
+   * <h5>Title...</h5>
+   * <h5><a href="...">...</a></h5>
+   * @param {Function} $ - Cheerio instance
+   * @returns {Array<{titleFromH5: string, mdrivePageUrl: string, parsedQuality: number}>}
+   */
+  parseMovieDownloadBlocks($) {
+    const blocks = [];
+    const seen = new Set();
+
+    $('h5').each((_, elem) => {
+      const $h5 = $(elem);
+      const $link = $h5.find('a[href]').first();
+
+      if (!$link.length) {
+        return;
+      }
+
+      const previousH5 = $h5.prevAll('h5').first();
+      if (!previousH5.length || previousH5.find('a[href]').length > 0) {
+        return;
+      }
+
+      const titleFromH5 = previousH5.text().replace(/\s+/g, ' ').trim();
+      if (!titleFromH5) {
+        return;
+      }
+
+      let href = $link.attr('href');
+      if (!href) {
+        return;
+      }
+
       try {
-        const textData = typeof response.text === 'string' ? response.text : JSON.stringify(response.text);
-        data = typeof textData === 'string' ? JSON.parse(textData) : textData;
-      } catch (parseError) {
-        console.error(`[MoviesDrive] Error parsing JSON for ${imdbId}:`, parseError.message);
-        return null;
+        if (!href.startsWith('http')) {
+          href = new URL(href, this.apiUrl).href;
+        }
+      } catch {
+        return;
       }
 
-      // Check if we have hits
-      if (!data.hits || !Array.isArray(data.hits)) {
-        console.warn(`[MoviesDrive] No hits found for ${imdbId}`);
-        return null;
+      const parsedQuality = this.extractQualityFromText(`${titleFromH5} ${$link.text()}`);
+      const key = `${titleFromH5}|${href}`;
+      if (seen.has(key)) {
+        return;
       }
 
-      // Step 2: Find the matching document
-      for (const hit of data.hits) {
-        const doc = hit.document;
-        if (doc.imdb_id === imdbId) {
-          console.debug(`[MoviesDrive] Found matching document for ${imdbId}`);
-          
-          // Step 3: Get the actual content page using the permalink
-          const contentUrl = this.apiUrl + doc.permalink;
-          console.debug(`[MoviesDrive] Fetching content page: ${contentUrl}`);
-          
-          const contentResponse = await this.http.get(contentUrl);
-          const textResponse = typeof contentResponse.text === 'string' 
-            ? contentResponse.text 
-            : JSON.stringify(contentResponse.text);
-          
-          // Parse HTML and return cheerio document
-          const result = { document: load(textResponse), doc };
-          
-          // Cache the result
-          this.cache.set(cacheKey, result);
-          
-          return result;
+      seen.add(key);
+      blocks.push({
+        titleFromH5,
+        mdrivePageUrl: href,
+        parsedQuality,
+      });
+    });
+
+    return blocks;
+  }
+
+  /**
+   * Extract a strict HubCloud wrapper URL from an mdrive archive page.
+   * Priority:
+   * 1) h4 a[href*="hubcloud"]
+   * 2) a[href*="hubcloud"][href*="/drive/"]
+   * @param {string} mdrivePageUrl
+   * @returns {Promise<string|null>}
+   */
+  async extractHubCloudWrapperFromMdrive(mdrivePageUrl) {
+    try {
+      const response = await this.http.get(mdrivePageUrl, { timeout: 20000 });
+      const textResponse = typeof response.text === 'string' ? response.text : JSON.stringify(response.text);
+      const $ = load(textResponse);
+
+      const selectors = [
+        'h4 a[href*="hubcloud"]',
+        'a[href*="hubcloud"][href*="/drive/"]',
+      ];
+
+      for (const selector of selectors) {
+        const candidates = $(selector).toArray();
+        for (const candidate of candidates) {
+          let href = $(candidate).attr('href');
+          if (!href) {
+            continue;
+          }
+
+          try {
+            if (!href.startsWith('http')) {
+              href = new URL(href, mdrivePageUrl).href;
+            }
+          } catch {
+            continue;
+          }
+
+          const hrefLower = href.toLowerCase();
+          if (hrefLower.includes('hubcloud') && hrefLower.includes('/drive/')) {
+            return href;
+          }
         }
       }
 
-      console.warn(`[MoviesDrive] No matching document found for ${imdbId}`);
       return null;
     } catch (error) {
-      console.error(`[MoviesDrive] Error in searchAndGetDocument for ${imdbId}:`, error.message);
+      console.error(`[MoviesDrive] Error getting hubcloud wrapper from ${mdrivePageUrl}:`, error.message);
       return null;
     }
   }
 
   /**
-   * Parse download header text to extract metadata
-   * @param {string} text - The header text
-   * @returns {Object} Parsed metadata
+   * Normalize stream source names for movie output.
+   * @param {Object} stream
+   * @returns {'FSL'|'Pixel'|null}
    */
-  parseDownloadHeader(text) {
-    const metadata = {
-      quality: '',
-      codec: '',
-      language: '',
-      size: '',
-      type: 'WEB-DL', // default
-    };
+  normalizeMovieSource(stream) {
+    const urlLower = String(stream?.url || '').toLowerCase();
+    const sourceLower = String(stream?.source || '').toLowerCase();
 
-    const textLower = text.toLowerCase();
-
-    // Extract quality
-    if (textLower.includes('4k') || textLower.includes('2160p')) {
-      metadata.quality = '4K';
-    } else if (textLower.includes('1080p')) {
-      metadata.quality = '1080p';
-    } else if (textLower.includes('720p')) {
-      metadata.quality = '720p';
-    } else if (textLower.includes('480p')) {
-      metadata.quality = '480p';
+    if (urlLower.includes('pixeldrain') || sourceLower.includes('pixel')) {
+      return 'Pixel';
     }
 
-    // Extract codec
-    if (textLower.includes('x265') || textLower.includes('hevc') || textLower.includes('h.265')) {
-      metadata.codec = 'x265 HEVC';
-    } else if (textLower.includes('x264') || textLower.includes('h.264')) {
-      metadata.codec = 'x264';
-    } else if (textLower.includes('10bit')) {
-      metadata.codec = metadata.codec ? `${metadata.codec} 10BIT` : '10BIT';
+    if (
+      urlLower.includes('fsl') ||
+      urlLower.includes('hub.fsl') ||
+      sourceLower.includes('fsl')
+    ) {
+      return 'FSL';
     }
 
-    // Extract language
-    const langMatches = text.match(/\[(.*?)\]/g);
-    if (langMatches) {
-      for (const match of langMatches) {
-        const lang = match.replace(/[\[\]]/g, '').trim();
-        if (lang && !lang.match(/^\d/)) { // Skip if starts with number (likely size)
-          metadata.language = lang;
+    return null;
+  }
+
+  /**
+   * Normalize stream source names for series output.
+   * @param {Object} stream
+   * @returns {'FSL'|'Pixel'|null}
+   */
+  normalizeSeriesSource(stream) {
+    const urlLower = String(stream?.url || '').toLowerCase();
+    const sourceLower = String(stream?.source || '').toLowerCase();
+
+    if (urlLower.includes('pixeldrain') || sourceLower.includes('pixel')) {
+      return 'Pixel';
+    }
+
+    if (sourceLower.includes('fsl') || urlLower.includes('fsl')) {
+      return 'FSL';
+    }
+
+    return null;
+  }
+
+  normalizeWhitespace(text) {
+    return String(text || '').replace(/\s+/g, ' ').trim();
+  }
+
+  extractFileSizeFromText(text) {
+    const normalized = this.normalizeWhitespace(text);
+    const match = normalized.match(/(\d+(?:\.\d+)?)\s*(TB|GB|MB)/i);
+    if (!match) {
+      return null;
+    }
+    return `${match[1]} ${match[2].toUpperCase()}`;
+  }
+
+  cleanSeriesHubCloudFilename(rawFilename) {
+    const normalized = this.normalizeWhitespace(rawFilename);
+    if (!normalized) {
+      return null;
+    }
+
+    let cleaned = normalized
+      .replace(/\.(mkv|mp4|avi|mov|m4v|webm)\b.*$/i, '')
+      .replace(/\s*[-–—]?\s*\[[^\]]*moviesdrives?[^\]]*\]\s*$/i, '')
+      .replace(/\s*[-–—]?\s*moviesdrives?\.[a-z]{2,}\s*$/i, '')
+      .replace(/\s*[-–—]?\s*\[[^\]]*\.cv[^\]]*\]\s*$/i, '')
+      .replace(/[-_.\s]+$/g, '')
+      .trim();
+
+    if (!cleaned) {
+      return null;
+    }
+
+    // Preserve original dot/dash-separated style from filename.
+    cleaned = cleaned.replace(/\s+/g, ' ');
+    return cleaned || null;
+  }
+
+  /**
+   * Extract filename and size metadata from a HubCloud drive wrapper page.
+   * @param {string} wrapperUrl
+   * @returns {Promise<{rawFilename:string|null,cleanBaseTitle:string|null,fileSize:string|null}|null>}
+   */
+  async extractHubCloudDriveMetadata(wrapperUrl) {
+    const cacheKey = `hubmeta:${wrapperUrl}`;
+    const cached = this.cache.get(cacheKey);
+    if (cached) {
+      return cached.__missing ? null : cached;
+    }
+
+    try {
+      const response = await this.http.get(wrapperUrl, { timeout: 20000 });
+      const textResponse = typeof response.text === 'string' ? response.text : JSON.stringify(response.text);
+      const $ = load(textResponse);
+
+      const rawFilename =
+        this.normalizeWhitespace($('div.card-header').first().text()) ||
+        this.normalizeWhitespace($('title').first().text()) ||
+        null;
+
+      const cleanBaseTitle = this.cleanSeriesHubCloudFilename(rawFilename);
+
+      let fileSize = null;
+      const sizeCandidates = [];
+
+      $('li').each((_, elem) => {
+        const rowText = this.normalizeWhitespace($(elem).text());
+        if (!/file\s*size/i.test(rowText)) {
+          return;
+        }
+
+        sizeCandidates.push(this.normalizeWhitespace($(elem).find('i').first().text()));
+        sizeCandidates.push(rowText);
+      });
+
+      sizeCandidates.push(this.normalizeWhitespace($('li:contains("File Size") i').first().text()));
+      sizeCandidates.push(this.normalizeWhitespace($('li:contains("File Size")').first().text()));
+
+      $('i#size').each((_, elem) => {
+        sizeCandidates.push(this.normalizeWhitespace($(elem).text()));
+      });
+
+      for (const candidate of sizeCandidates) {
+        const parsed = this.extractFileSizeFromText(candidate);
+        if (parsed) {
+          fileSize = parsed;
           break;
         }
       }
+
+      if (!fileSize) {
+        const pageText = this.normalizeWhitespace($.root().text());
+        const fallbackSizeMatch = pageText.match(/file\s*size[^0-9]*(\d+(?:\.\d+)?)\s*(TB|GB|MB)/i);
+        if (fallbackSizeMatch) {
+          fileSize = `${fallbackSizeMatch[1]} ${fallbackSizeMatch[2].toUpperCase()}`;
+        }
+      }
+
+      const metadata = {
+        rawFilename,
+        cleanBaseTitle,
+        fileSize: fileSize || null,
+      };
+
+      if (!metadata.rawFilename && !metadata.cleanBaseTitle && !metadata.fileSize) {
+        this.cache.set(cacheKey, { __missing: true });
+        return null;
+      }
+
+      this.cache.set(cacheKey, metadata);
+      return metadata;
+    } catch (error) {
+      console.error(`[MoviesDrive] Error extracting HubCloud metadata from ${wrapperUrl}:`, error.message);
+      this.cache.set(cacheKey, { __missing: true });
+      return null;
+    }
+  }
+
+  /**
+   * Parse season number from permalink slug.
+   * Examples:
+   * - /landman-season-1/ => 1
+   * - /show-season_2/ => 2
+   * - /show-s01/ => 1
+   * @param {string} permalink
+   * @returns {number|null}
+   */
+  getSeasonFromPermalink(permalink) {
+    const normalized = String(permalink || '').toLowerCase();
+    if (!normalized) {
+      return null;
     }
 
-    // Extract file size
-    const sizeMatch = text.match(/(\d+\.?\d*\s*(GB|MB|gb|mb))/i);
-    if (sizeMatch) {
-      metadata.size = sizeMatch[1].toUpperCase();
+    const patterns = [
+      /(?:^|[\/_-])season(?:[\s/_-]|%20)*0*(\d+)(?=$|[\/_-])/i,
+      /(?:^|[\/_-])s0*(\d{1,2})(?=$|[\/_-])/i,
+    ];
+
+    for (const pattern of patterns) {
+      const match = normalized.match(pattern);
+      if (!match?.[1]) {
+        continue;
+      }
+
+      const value = parseInt(match[1], 10);
+      if (!Number.isNaN(value) && value > 0) {
+        return value;
+      }
     }
 
-    // Extract type (WEB-DL, BluRay, etc.)
-    if (textLower.includes('web-dl') || textLower.includes('webdl')) {
-      metadata.type = 'WEB-DL';
-    } else if (textLower.includes('bluray') || textLower.includes('blu-ray')) {
-      metadata.type = 'BluRay';
-    } else if (textLower.includes('webrip')) {
-      metadata.type = 'WEBRip';
-    } else if (textLower.includes('hdrip')) {
-      metadata.type = 'HDRip';
+    return null;
+  }
+
+  parseFileSizeToMB(fileSize) {
+    const match = String(fileSize || '').match(/(\d+(?:\.\d+)?)\s*(TB|GB|MB)/i);
+    if (!match) {
+      return 0;
     }
 
-    return metadata;
+    const value = parseFloat(match[1]);
+    const unit = match[2].toUpperCase();
+
+    if (unit === 'TB') return value * 1024 * 1024;
+    if (unit === 'GB') return value * 1024;
+    return value;
+  }
+
+  formatEpisodeNumber(episode) {
+    return String(Math.max(1, parseInt(episode, 10) || 1)).padStart(2, '0');
+  }
+
+  buildSeriesFallbackBaseTitle(documentTitle, season, episode) {
+    const episodeTag = `S${String(season).padStart(2, '0')}E${this.formatEpisodeNumber(episode)}`;
+    const normalizedTitle = this.normalizeWhitespace(documentTitle);
+
+    if (!normalizedTitle) {
+      return `Series.${episodeTag}`;
+    }
+
+    const strippedSeason = normalizedTitle
+      .replace(/\bseason\s*\d+\b.*$/i, '')
+      .replace(/\(\d{4}\)/g, '')
+      .trim();
+    const compact = strippedSeason.replace(/[^a-zA-Z0-9]+/g, '.').replace(/\.+/g, '.').replace(/^\.|\.$/g, '');
+
+    return compact ? `${compact}.${episodeTag}` : `Series.${episodeTag}`;
+  }
+
+  extractPreferredSeriesBaseTitle(streamTitle) {
+    const normalized = this.normalizeWhitespace(streamTitle);
+    if (!normalized) {
+      return null;
+    }
+
+    const hasEpisodeToken = /s\d+\s*e\d+|ep(?:isode)?\s*0*\d+/i.test(normalized);
+    const hasVideoExt = /\.(mkv|mp4|avi|mov|m4v|webm)$/i.test(normalized);
+
+    if (!hasEpisodeToken && !hasVideoExt) {
+      return null;
+    }
+
+    const withoutExtension = normalized.replace(/\.(mkv|mp4|avi|mov|m4v|webm)$/i, '');
+    return withoutExtension.trim();
+  }
+
+  /**
+   * Parse series resolution blocks from sequential h5 nodes:
+   * - h5 text: "Season X ... 480p ..."
+   * - next h5 link: "... Single Episode"
+   * @param {Function} $ - Cheerio instance
+   * @param {number} season - Requested season number
+   * @returns {Array<{seasonHeadingTitle:string,quality:number,mdriveArchiveUrl:string,perEpisodeSizeIfPresent:string|null}>}
+   */
+  parseSeriesSingleEpisodeBlocks($, season) {
+    const blocks = [];
+    const seen = new Set();
+    const h5Nodes = $('h5').toArray();
+    const seasonRegex = new RegExp(`\\bseason\\s*0*${season}\\b|\\bs0*${season}\\b`, 'i');
+
+    for (let i = 0; i < h5Nodes.length; i++) {
+      const current = $(h5Nodes[i]);
+      if (current.find('a[href]').length > 0) {
+        continue;
+      }
+
+      const headingText = this.normalizeWhitespace(current.text());
+      if (!headingText || !seasonRegex.test(headingText)) {
+        continue;
+      }
+
+      if (!/(?:\b\d{3,4}p\b|\b4k\b)/i.test(headingText)) {
+        continue;
+      }
+
+      const quality = this.extractQualityFromText(headingText);
+      if (!quality) {
+        continue;
+      }
+
+      const nextNode = h5Nodes[i + 1] ? $(h5Nodes[i + 1]) : null;
+      if (!nextNode || nextNode.find('a[href]').length === 0) {
+        continue;
+      }
+
+      const anchor = nextNode.find('a[href]').first();
+      const anchorText = this.normalizeWhitespace(anchor.text());
+      const anchorTextLower = anchorText.toLowerCase();
+
+      if (!anchorTextLower.includes('single episode') || anchorTextLower.includes('zip')) {
+        continue;
+      }
+
+      let href = anchor.attr('href');
+      if (!href) {
+        continue;
+      }
+
+      try {
+        if (!href.startsWith('http')) {
+          href = new URL(href, this.apiUrl).href;
+        }
+      } catch {
+        continue;
+      }
+
+      const key = `${quality}|${href}`;
+      if (seen.has(key)) {
+        continue;
+      }
+
+      seen.add(key);
+      blocks.push({
+        seasonHeadingTitle: headingText,
+        quality,
+        mdriveArchiveUrl: href,
+        perEpisodeSizeIfPresent: this.extractFileSizeFromText(headingText),
+      });
+    }
+
+    return blocks;
+  }
+
+  /**
+   * Extract exact episode HubCloud wrapper from mdrive archive page.
+   * @param {string} archiveUrl - mdrive archive URL containing all episodes
+   * @param {number} episode - requested episode number
+   * @returns {Promise<{hubcloudWrapperUrl:string,episodeLabel:string,episodeFileSize:string|null}|null>}
+   */
+  async extractEpisodeHubCloudFromArchive(archiveUrl, episode) {
+    try {
+      const response = await this.http.get(archiveUrl, { timeout: 20000 });
+      const textResponse = typeof response.text === 'string' ? response.text : JSON.stringify(response.text);
+      const $ = load(textResponse);
+      const h5Nodes = $('h5').toArray();
+      const episodeInt = Math.max(1, parseInt(episode, 10) || 1);
+      const targetEpisodeRegex = new RegExp(
+        `\\b(?:ep(?:isode)?\\s*0*${episodeInt}|e\\s*0*${episodeInt}|s\\d+e\\s*0*${episodeInt})\\b`,
+        'i',
+      );
+      const anyEpisodeRegex = /\b(?:ep(?:isode)?\s*\d+|e\s*\d+|s\d+e\d+)\b/i;
+
+      for (let i = 0; i < h5Nodes.length; i++) {
+        const headingNode = $(h5Nodes[i]);
+        if (headingNode.find('a[href]').length > 0) {
+          continue;
+        }
+
+        const headingText = this.normalizeWhitespace(headingNode.text());
+        if (!targetEpisodeRegex.test(headingText)) {
+          continue;
+        }
+
+        const episodeFileSize = this.extractFileSizeFromText(headingText);
+
+        for (let j = i + 1; j < h5Nodes.length; j++) {
+          const sectionNode = $(h5Nodes[j]);
+          const sectionText = this.normalizeWhitespace(sectionNode.text());
+
+          if (sectionNode.find('a[href]').length === 0) {
+            if (anyEpisodeRegex.test(sectionText)) {
+              break;
+            }
+            continue;
+          }
+
+          const anchors = sectionNode.find('a[href]').toArray();
+          for (const anchorElem of anchors) {
+            let href = $(anchorElem).attr('href');
+            if (!href) {
+              continue;
+            }
+
+            try {
+              if (!href.startsWith('http')) {
+                href = new URL(href, archiveUrl).href;
+              }
+            } catch {
+              continue;
+            }
+
+            const hrefLower = href.toLowerCase();
+            if (hrefLower.includes('hubcloud') && hrefLower.includes('/drive/')) {
+              return {
+                hubcloudWrapperUrl: href,
+                episodeLabel: headingText,
+                episodeFileSize,
+              };
+            }
+          }
+        }
+
+        // We found the requested episode heading but no HubCloud link nearby.
+        return null;
+      }
+
+      return null;
+    } catch (error) {
+      console.error(`[MoviesDrive] Error getting episode wrapper from ${archiveUrl}:`, error.message);
+      return null;
+    }
+  }
+
+  /**
+   * Search for content by IMDB ID and get document
+   * @param {string} imdbId - IMDB ID (e.g., tt1234567)
+   * @param {number} [season] - Season number (for series)
+   * @returns {Promise<Object|null>} Search result with document
+   */
+  async searchAndGetDocument(imdbId, season) {
+    try {
+      // Check cache first
+      const cacheKey = season ? `search:${imdbId}:S${season}` : `search:${imdbId}`;
+      const cached = this.cache.get(cacheKey);
+      if (cached) {
+        console.log(`[MoviesDrive] Cache hit for ${imdbId}${season ? ` S${season}` : ''}`);
+        return cached;
+      }
+
+      // Search API
+      const searchUrl = `${this.apiUrl}/searchapi.php?q=${imdbId}`;
+      console.log(`[MoviesDrive] Searching at: ${searchUrl}`);
+      
+      const response = await this.http.get(searchUrl);
+      const textResponse = typeof response.text === 'string' ? response.text : JSON.stringify(response.text);
+      const searchData = JSON.parse(textResponse);
+
+      if (!searchData.hits || searchData.hits.length === 0) {
+        console.log(`[MoviesDrive] No results found for ${imdbId}`);
+        return null;
+      }
+
+      // Find the best matching document.
+      let document = null;
+      const hits = Array.isArray(searchData.hits) ? searchData.hits : [];
+      const exactImdbHits = hits.filter(hit => hit?.document?.imdb_id === imdbId);
+      const candidateHits = exactImdbHits.length > 0 ? exactImdbHits : hits;
+
+      if (season) {
+        const requestedSeason = Math.max(1, parseInt(season, 10) || 1);
+        console.log(`[MoviesDrive] Looking for season ${requestedSeason} in ${candidateHits.length} candidate result(s)`);
+
+        candidateHits.forEach((hit, index) => {
+          const permalink = hit?.document?.permalink || '';
+          const parsedSeason = this.getSeasonFromPermalink(permalink);
+          console.log(
+            `[MoviesDrive] Candidate ${index + 1}/${candidateHits.length}: permalink=${permalink || '[none]'} parsedSeason=${
+              parsedSeason ?? 'n/a'
+            }`,
+          );
+        });
+
+        const titlePattern = new RegExp(`\\bSeason\\s*0*${requestedSeason}\\b|\\bS\\s*0*${requestedSeason}\\b`, 'i');
+
+        const seasonPermalinkHit = candidateHits.find(hit => {
+          const permalink = hit?.document?.permalink || '';
+          const parsedSeason = this.getSeasonFromPermalink(permalink);
+          return parsedSeason === requestedSeason;
+        });
+
+        if (seasonPermalinkHit?.document) {
+          document = seasonPermalinkHit.document;
+          console.log(`[MoviesDrive] Selected tier=permalink-season-match: ${document.permalink}`);
+        } else {
+          const seasonTitleHit = candidateHits.find(hit => {
+            const title = hit?.document?.post_title || hit?.document?.title || '';
+            return titlePattern.test(title);
+          });
+
+          if (seasonTitleHit?.document) {
+            document = seasonTitleHit.document;
+            console.log(`[MoviesDrive] Selected tier=title-season-match: ${document.permalink}`);
+          } else if (candidateHits[0]?.document) {
+            document = candidateHits[0].document;
+            console.log(`[MoviesDrive] Selected tier=first-exact-imdb-hit: ${document.permalink}`);
+          } else if (hits[0]?.document) {
+            document = hits[0].document;
+            console.log(`[MoviesDrive] Selected tier=first-overall-hit: ${document.permalink}`);
+          }
+        }
+      } else {
+        // For movies, prefer exact IMDB match before fallback.
+        if (candidateHits[0]?.document && exactImdbHits.length > 0) {
+          document = candidateHits[0].document;
+          console.log(`[MoviesDrive] Found exact movie match for ${imdbId}`);
+        } else if (hits[0]?.document) {
+          document = hits[0].document;
+          console.log(`[MoviesDrive] No exact movie match for ${imdbId}, using first result`);
+        }
+      }
+
+      if (!document?.permalink) {
+        console.log(`[MoviesDrive] No document/permalink selected for ${imdbId}`);
+        return null;
+      }
+
+      // Fetch the content page
+      const contentUrl = `${this.apiUrl}${document.permalink}`;
+      console.log(`[MoviesDrive] Fetching content page: ${contentUrl}`);
+      
+      const contentResponse = await this.http.get(contentUrl);
+      const contentText = typeof contentResponse.text === 'string' ? contentResponse.text : JSON.stringify(contentResponse.text);
+      const $ = load(contentText);
+
+      const result = {
+        document,
+        html: contentText,
+        $: $,
+      };
+
+      // Cache the result
+      this.cache.set(cacheKey, result);
+      
+      return result;
+    } catch (error) {
+      console.error(`[MoviesDrive] Error searching for ${imdbId}:`, error.message);
+      return null;
+    }
   }
 
   /**
    * Extract movie streams
-   * Gets wrapper links and uses extractors to get actual streaming URLs
+   * @param {string} imdbId - IMDB ID
+   * @param {string} _title - Movie title (unused for movie-page h5 title mode)
+   * @returns {Promise<Array<Object>>} Array of streams
    */
-  async extractMovieStreams(imdbId, title = '') {
+  async extractMovieStreams(imdbId, _title) {
+    console.log(`[MoviesDrive] Getting streams for movie ${imdbId}`);
+    
     const result = await this.searchAndGetDocument(imdbId);
     if (!result) return [];
 
-    const { document: $, doc } = result;
+    const { $ } = result;
     const allStreams = [];
 
-    // Get movie title from document or extract from HTML
-    let movieTitle = doc.title || doc.name || title || 'Unknown Title';
-    let movieYear = doc.year || '';
-    
-    // Try to extract title from HTML if not in document
-    if (movieTitle === 'Unknown Title' || movieTitle === title) {
-      // Try h1 tag
-      const h1Text = $('h1').first().text().trim();
-      if (h1Text) {
-        // Clean up title - remove quality info and other metadata
-        movieTitle = h1Text.replace(/\d{3,4}p.*$/i, '').replace(/\(.*?\)/g, '').trim();
-      } else {
-        // Try title tag
-        const titleText = $('title').text().trim();
-        if (titleText) {
-          movieTitle = titleText.replace(/MoviesDrive/i, '').replace(/Download/i, '').trim();
+    const resolutionBlocks = this.parseMovieDownloadBlocks($);
+    console.log(`[MoviesDrive] Found ${resolutionBlocks.length} movie resolution block(s) for ${imdbId}`);
+
+    for (const block of resolutionBlocks) {
+      try {
+        console.log(`[MoviesDrive] Processing ${block.parsedQuality}p block: ${block.titleFromH5}`);
+        console.log(`[MoviesDrive] Archive page: ${block.mdrivePageUrl}`);
+
+        const hubcloudWrapper = await this.extractHubCloudWrapperFromMdrive(block.mdrivePageUrl);
+        if (!hubcloudWrapper) {
+          console.log(`[MoviesDrive] No HubCloud wrapper found for ${block.mdrivePageUrl}, skipping (strict mode)`);
+          continue;
         }
-      }
-    }
 
-    try {
-      const downloadHeaders = $('h5');
-      console.log(`[MoviesDrive] Found ${downloadHeaders.length} download headers for ${imdbId}`);
+        console.log(`[MoviesDrive] HubCloud wrapper: ${hubcloudWrapper}`);
+        const extractedStreams = await this.extractors.extractFromUrl(hubcloudWrapper, block.titleFromH5);
 
-      if (downloadHeaders.length === 0) {
-        console.warn(`[MoviesDrive] No h5 headers found for ${imdbId}`);
-        return [];
-      }
+        if (!extractedStreams.length) {
+          console.log(`[MoviesDrive] No final streams resolved from wrapper ${hubcloudWrapper}`);
+          continue;
+        }
 
-      for (const headerElem of downloadHeaders) {
-        const $header = $(headerElem);
-        const headerText = $header.text().trim();
-        const $link = $header.find('a').first();
-        const href = $link.attr('href');
-
-        if (!href) continue;
-
-        // Parse metadata from header text
-        const metadata = this.parseDownloadHeader(headerText);
-        console.log(`[MoviesDrive] Processing: ${headerText.substring(0, 80)}...`);
-        console.log(`[MoviesDrive] Metadata:`, metadata);
-
-        try {
-          // Extract wrapper links
-          const wrapperLinks = await this.extractMdrive(href);
-          console.log(`[MoviesDrive] Found ${wrapperLinks.length} wrapper link(s)`);
-
-          // Extract from each wrapper link using actual extractors
-          for (const wrapperUrl of wrapperLinks) {
-            try {
-              console.log(`[MoviesDrive] Extracting from wrapper: ${wrapperUrl.substring(0, 60)}...`);
-              const extractedStreams = await this.extractors.extractFromUrl(wrapperUrl);
-
-              if (extractedStreams.length > 0) {
-                console.log(`[MoviesDrive] ✓ Got ${extractedStreams.length} stream(s) from extractor:`);
-                
-                // Add metadata to each stream
-                extractedStreams.forEach((s, i) => {
-                  console.log(`  [${i + 1}] ${s.source} (${s.quality}p): ${s.url.substring(0, 70)}`);
-                  
-                  // Enhance stream with metadata
-                  s.metadata = {
-                    title: movieTitle,
-                    year: movieYear,
-                    quality: metadata.quality || s.quality + 'p',
-                    codec: metadata.codec,
-                    language: metadata.language,
-                    size: metadata.size,
-                    type: metadata.type,
-                    server: s.source,
-                  };
-                });
-                
-                allStreams.push(...extractedStreams);
-              } else {
-                console.warn(`[MoviesDrive] ✗ No streams from extractor, adding wrapper as fallback`);
-                allStreams.push({
-                  url: wrapperUrl,
-                  quality: metadata.quality ? parseInt(metadata.quality) : 720,
-                  source: 'MoviesDrive-Wrapper',
-                  metadata: {
-                    title: movieTitle,
-                    year: movieYear,
-                    quality: metadata.quality || '720p',
-                    codec: metadata.codec,
-                    language: metadata.language,
-                    size: metadata.size,
-                    type: metadata.type,
-                    server: 'Wrapper',
-                  },
-                });
-              }
-            } catch (err) {
-              console.error(`[MoviesDrive] Extractor error:`, err.message);
-              // Add wrapper as fallback
-              allStreams.push({
-                url: wrapperUrl,
-                quality: metadata.quality ? parseInt(metadata.quality) : 720,
-                source: 'MoviesDrive-Wrapper',
-                metadata: {
-                  title: movieTitle,
-                  year: movieYear,
-                  quality: metadata.quality || '720p',
-                  codec: metadata.codec,
-                  language: metadata.language,
-                  size: metadata.size,
-                  type: metadata.type,
-                  server: 'Wrapper',
-                },
-              });
-            }
+        for (const stream of extractedStreams) {
+          const normalizedSource = this.normalizeMovieSource(stream);
+          if (!normalizedSource) {
+            continue;
           }
-        } catch (err) {
-          console.error(`[MoviesDrive] Error processing download link:`, err.message);
+
+          const finalUrl = stream?.url;
+          if (!finalUrl || !String(finalUrl).startsWith('http')) {
+            continue;
+          }
+
+          const fileSize =
+            stream?.fileSize ||
+            this.extractFileSizeFromText(stream?.title) ||
+            this.extractFileSizeFromText(block.titleFromH5) ||
+            null;
+
+          allStreams.push({
+            ...stream,
+            url: finalUrl,
+            quality: block.parsedQuality,
+            source: normalizedSource,
+            title: `${block.titleFromH5} [${normalizedSource}]`,
+            fileSize,
+            _sizeMb: this.parseFileSizeToMB(fileSize),
+          });
         }
+      } catch (error) {
+        console.error(`[MoviesDrive] Error processing movie block ${block.mdrivePageUrl}:`, error.message);
       }
-    } catch (error) {
-      console.error(`[MoviesDrive] Error extracting movies:`, error.message);
     }
 
-    // Deduplicate and sort
+    // Sort by quality desc, then file size desc, then source preference, then URL.
+    const sourcePriority = { FSL: 2, Pixel: 1 };
+    allStreams.sort((a, b) => {
+      if (b.quality !== a.quality) {
+        return b.quality - a.quality;
+      }
+
+      const sizeDiff = (b._sizeMb || 0) - (a._sizeMb || 0);
+      if (sizeDiff !== 0) {
+        return sizeDiff;
+      }
+
+      const sourceDiff = (sourcePriority[b.source] || 0) - (sourcePriority[a.source] || 0);
+      if (sourceDiff !== 0) {
+        return sourceDiff;
+      }
+
+      return String(a.url || '').localeCompare(String(b.url || ''));
+    });
+
     const uniqueStreams = [];
     const seenUrls = new Set();
 
     for (const stream of allStreams) {
       if (!seenUrls.has(stream.url)) {
         seenUrls.add(stream.url);
-        uniqueStreams.push(stream);
+        const { _sizeMb, ...cleanStream } = stream;
+        uniqueStreams.push(cleanStream);
       }
     }
-
-    // Sort by quality (highest first)
-    uniqueStreams.sort((a, b) => {
-      const qualityA = a.metadata?.quality ? parseInt(a.metadata.quality) : a.quality;
-      const qualityB = b.metadata?.quality ? parseInt(b.metadata.quality) : b.quality;
-      return qualityB - qualityA;
-    });
 
     console.log(`[MoviesDrive] Total streams: ${uniqueStreams.length}`);
     return uniqueStreams;
   }
 
   /**
-   * Extract TV series streams - Complete 11-step process
-   * Follows the SeriesDrive extraction guide for proper series URL resolution
+   * Extract series streams
+   * @param {string} imdbId - IMDB ID
+   * @param {number} season - Season number
+   * @param {number} episode - Episode number
+   * @returns {Promise<Array<Object>>} Array of streams
    */
-  async extractSeriesStreams(seriesId, seasonNum, episodeNum) {
-    // Step 1: Parse ID - Extract imdbId, season, episode from seriesId (format: tt14186672:1:1)
-    let imdbId, targetSeason, targetEpisode;
-    
-    if (seriesId.includes(':')) {
-      // Format: tt14186672:1:1
-      const parts = seriesId.split(':');
-      imdbId = parts[0];
-      targetSeason = parseInt(parts[1]) || seasonNum;
-      targetEpisode = parseInt(parts[2]) || episodeNum;
-    } else {
-      // Format: separate parameters
-      imdbId = seriesId;
-      targetSeason = parseInt(seasonNum) || 1;
-      targetEpisode = parseInt(episodeNum) || 1;
-    }
-    
-    console.log(`[MoviesDrive] Step 1: Parsed ID - imdbId=${imdbId}, season=${targetSeason}, episode=${targetEpisode}`);
+  async extractSeriesStreams(imdbId, season, episode) {
+    console.log(`[MoviesDrive] Getting streams for series ${imdbId} S${season}E${episode}`);
+    const result = await this.searchAndGetDocument(imdbId, season);
+    if (!result) return [];
 
-    // Step 2: Search API with ONLY IMDb ID (not the full series ID with season:episode)
-    const searchResults = await this.searchSeriesAPI(imdbId);
-    if (!searchResults || searchResults.length === 0) {
-      console.warn(`[MoviesDrive] No search results found for ${imdbId}`);
-      return [];
-    }
-    console.log(`[MoviesDrive] Step 2: Found ${searchResults.length} season(s) for ${imdbId}`);
-
-    // Step 3: Match correct season from search results
-    const seasonDoc = this.findMatchingSeason(searchResults, targetSeason);
-    if (!seasonDoc) {
-      console.warn(`[MoviesDrive] Step 3: Season ${targetSeason} not found in search results`);
-      console.log(`[MoviesDrive] Available seasons:`, searchResults.map(r => r.post_title));
-      return [];
-    }
-    console.log(`[MoviesDrive] Step 3: ✓ Found matching season: ${seasonDoc.post_title}`);
-    console.log(`[MoviesDrive] Permalink: ${seasonDoc.permalink}`);
-
-    // Get series title
-    let seriesTitle = seasonDoc.post_title || 'Unknown Series';
-    let seriesYear = seasonDoc.year || '';
-    // Clean up title - remove quality info
-    seriesTitle = seriesTitle.replace(/\d{3,4}p.*$/i, '').replace(/\(.*?\)/g, '').trim();
-
-    // Step 4: Fetch season content page
-    const seasonPageUrl = this.apiUrl + seasonDoc.permalink;
-    console.log(`[MoviesDrive] Step 4: Fetching season page: ${seasonPageUrl}`);
-    
-    let $;
-    try {
-      const response = await this.http.get(seasonPageUrl);
-      const textResponse = typeof response.text === 'string' ? response.text : JSON.stringify(response.text);
-      $ = load(textResponse);
-    } catch (error) {
-      console.error(`[MoviesDrive] Error fetching season page:`, error.message);
-      return [];
-    }
-
-    // Step 4: Extract quality-specific "Single Episode" links
-    const qualityLinks = this.extractQualityLinks($);
-    console.log(`[MoviesDrive] Step 4: Found ${qualityLinks.length} quality option(s): ${qualityLinks.map(q => q.quality).join(', ')}`);
-    
-    if (qualityLinks.length === 0) {
-      console.warn(`[MoviesDrive] No quality links found on season page`);
-      return [];
-    }
-
+    const { $, document } = result;
     const allStreams = [];
 
-    // Step 5-7: Process each quality
-    for (const qualityLink of qualityLinks) {
-      console.log(`[MoviesDrive] Step 5: Processing ${qualityLink.quality} quality...`);
-      console.log(`[MoviesDrive] Fetching episode list: ${qualityLink.url.substring(0, 80)}`);
-
-      let episodePage$;
-      try {
-        const epResponse = await this.http.get(qualityLink.url);
-        const epText = typeof epResponse.text === 'string' ? epResponse.text : JSON.stringify(epResponse.text);
-        episodePage$ = load(epText);
-      } catch (error) {
-        console.error(`[MoviesDrive] Error fetching episode list for ${qualityLink.quality}:`, error.message);
-        continue;
-      }
-
-      // Step 6: Parse episodes and filter by episode number
-      const episodeWrappers = this.extractEpisodeLinks(episodePage$, targetEpisode);
-      console.log(`[MoviesDrive] Step 6: Found ${episodeWrappers.length} wrapper(s) for Episode ${targetEpisode} in ${qualityLink.quality}`);
-
-      if (episodeWrappers.length === 0) {
-        console.warn(`[MoviesDrive] Episode ${targetEpisode} not found in ${qualityLink.quality} quality`);
-        continue;
-      }
-
-      // Step 7: Resolve wrapper URLs to get exact stream URLs
-      for (const wrapper of episodeWrappers) {
-        try {
-          console.log(`[MoviesDrive] Step 7: Resolving ${wrapper.source} wrapper: ${wrapper.url.substring(0, 60)}...`);
-          const extractedStreams = await this.extractors.extractFromUrl(wrapper.url);
-
-          if (extractedStreams.length > 0) {
-            console.log(`[MoviesDrive] ✓ Got ${extractedStreams.length} stream(s) from ${wrapper.source}:`);
-            
-            extractedStreams.forEach((s, i) => {
-              console.log(`  [${i + 1}] ${s.source} (${s.quality}p): ${s.url.substring(0, 70)}`);
-              
-              // Enhance stream with metadata
-              s.metadata = {
-                title: `${seriesTitle} S${targetSeason}E${targetEpisode}`,
-                year: seriesYear,
-                quality: qualityLink.quality || s.quality + 'p',
-                server: s.source,
-                episode: targetEpisode,
-                season: targetSeason,
-              };
-            });
-            
-            allStreams.push(...extractedStreams);
-          } else {
-            console.warn(`[MoviesDrive] ✗ No streams extracted from ${wrapper.source}, adding wrapper as fallback`);
-            allStreams.push({
-              url: wrapper.url,
-              quality: this.qualityToPixels(qualityLink.quality),
-              source: 'MoviesDrive-Wrapper',
-              metadata: {
-                title: `${seriesTitle} S${targetSeason}E${targetEpisode}`,
-                year: seriesYear,
-                quality: qualityLink.quality || '720p',
-                server: wrapper.source,
-                episode: targetEpisode,
-                season: targetSeason,
-              },
-            });
-          }
-        } catch (err) {
-          console.error(`[MoviesDrive] Error resolving ${wrapper.source} wrapper:`, err.message);
-          // Add wrapper as fallback
-          allStreams.push({
-            url: wrapper.url,
-            quality: this.qualityToPixels(qualityLink.quality),
-            source: 'MoviesDrive-Wrapper',
-            metadata: {
-              title: `${seriesTitle} S${targetSeason}E${targetEpisode}`,
-              year: seriesYear,
-              quality: qualityLink.quality || '720p',
-              server: wrapper.source,
-              episode: targetEpisode,
-              season: targetSeason,
-            },
-          });
-        }
-      }
-    }
-
-    // Step 9: Deduplicate and sort
-    const uniqueStreams = this.deduplicateAndSortStreams(allStreams);
-    console.log(`[MoviesDrive] Step 9: Total unique streams for S${targetSeason}E${targetEpisode}: ${uniqueStreams.length}`);
-    
-    return uniqueStreams;
-  }
-
-  /**
-   * Search series API - returns multiple seasons for the series
-   * Step 2 of series extraction
-   */
-  async searchSeriesAPI(imdbId) {
-    if (!imdbId || !imdbId.startsWith('tt')) {
-      console.warn(`[MoviesDrive] Invalid IMDb ID: ${imdbId}`);
-      return null;
-    }
-
-    const cacheKey = `series-search-${imdbId}`;
-    const cached = this.cache.get(cacheKey);
-    if (cached) {
-      console.debug(`[MoviesDrive] Using cached search results for ${imdbId}`);
-      return cached;
-    }
-
     try {
-      // Search with ONLY imdbId, no season:episode
-      const searchUrl = `${this.apiUrl}/searchapi.php?q=${imdbId}`;
-      console.log(`[MoviesDrive] Searching: ${searchUrl}`);
-      
-      const response = await this.http.get(searchUrl);
-      
-      let data;
-      try {
-        const textData = typeof response.text === 'string' ? response.text : JSON.stringify(response.text);
-        data = JSON.parse(textData);
-      } catch (parseError) {
-        console.error(`[MoviesDrive] Error parsing search response:`, parseError.message);
-        return null;
-      }
+      const seriesBlocks = this.parseSeriesSingleEpisodeBlocks($, season);
+      console.log(`[MoviesDrive] Found ${seriesBlocks.length} series resolution block(s) for S${season}`);
 
-      if (!data.hits || !Array.isArray(data.hits) || data.hits.length === 0) {
-        console.warn(`[MoviesDrive] No hits found for ${imdbId}`);
-        return null;
-      }
+      for (const block of seriesBlocks) {
+        console.log(`[MoviesDrive] Processing ${block.quality}p archive: ${block.mdriveArchiveUrl}`);
+        const episodeData = await this.extractEpisodeHubCloudFromArchive(block.mdriveArchiveUrl, episode);
 
-      // Extract documents from hits
-      const results = data.hits.map(hit => hit.document).filter(doc => doc.imdb_id === imdbId);
-      
-      console.log(`[MoviesDrive] Found ${results.length} result(s) for ${imdbId}`);
-      
-      // Cache results
-      this.cache.set(cacheKey, results);
-      
-      return results;
-    } catch (error) {
-      console.error(`[MoviesDrive] Error searching series API:`, error.message);
-      return null;
-    }
-  }
-
-  /**
-   * Find matching season from search results
-   * Step 3 of series extraction
-   */
-  findMatchingSeason(results, targetSeason) {
-    const target = parseInt(targetSeason);
-    
-    for (const doc of results) {
-      const title = doc.post_title || '';
-      
-      // Match patterns: "Season 1", "Season 2", "S01", "S1", "S2", "(S01)", "[S1]"
-      const seasonPatterns = [
-        /season\s*(\d+)/i,      // Season 1, Season 2, SEASON 01
-        /s0?(\d+)/i,            // S01, S1, s01, s1
-        /\(s0?(\d+)\)/i,         // (S01), (S1)
-        /\[s0?(\d+)\]/i,         // [S01], [S1]
-        /season\s*(\d+)\s*\(/i    // Season 1 (2025)
-      ];
-      
-      for (const pattern of seasonPatterns) {
-        const match = title.match(pattern);
-        if (match && parseInt(match[1]) === target) {
-          return doc;
+        if (!episodeData?.hubcloudWrapperUrl) {
+          console.log(`[MoviesDrive] No HubCloud episode wrapper found for ${block.mdriveArchiveUrl}, skipping (strict mode)`);
+          continue;
         }
-      }
-    }
-    
-    return null;
-  }
 
-  /**
-   * Extract quality-specific "Single Episode" links from season page
-   * Step 4 of series extraction
-   */
-  extractQualityLinks($) {
-    const qualityLinks = [];
-    
-    // Find all h5 headers that contain quality info
-    $('h5').each((_, elem) => {
-      const text = $(elem).text();
-      const $elem = $(elem);
-      
-      // Extract quality from text
-      let quality = '';
-      if (text.match(/1080p/i)) quality = '1080p';
-      else if (text.match(/720p/i)) quality = '720p';
-      else if (text.match(/480p/i)) quality = '480p';
-      else if (text.match(/2160p|4k/i)) quality = '4K';
-      
-      if (!quality) return; // Skip if no quality found
-      
-      // Look for "Single Episode" link after this h5
-      // The link could be directly inside h5 or in a sibling/next element
-      let singleEpisodeLink = null;
-      
-      // Check direct children
-      const directLink = $elem.find('a').filter((_, a) => {
-        const linkText = $(a).text().toLowerCase();
-        return linkText.includes('single') || linkText.includes('episode');
-      }).first();
-      
-      if (directLink.length > 0) {
-        singleEpisodeLink = directLink.attr('href');
-      }
-      
-      // Check next siblings if not found
-      if (!singleEpisodeLink) {
-        let nextElem = $elem.next();
-        let checkCount = 0;
-        
-        while (nextElem.length > 0 && checkCount < 5) {
-          const link = nextElem.find('a').filter((_, a) => {
-            const linkText = $(a).text().toLowerCase();
-            return linkText.includes('single') || linkText.includes('episode');
-          }).first();
-          
-          if (link.length > 0) {
-            singleEpisodeLink = link.attr('href');
-            break;
+        const wrapperMeta = await this.extractHubCloudDriveMetadata(episodeData.hubcloudWrapperUrl);
+        const fallbackBaseTitle = this.buildSeriesFallbackBaseTitle(
+          document?.post_title || document?.title,
+          season,
+          episode,
+        );
+        const inheritedFileSize = episodeData.episodeFileSize || block.perEpisodeSizeIfPresent || null;
+        const extractedStreams = await this.extractors.extractFromUrl(
+          episodeData.hubcloudWrapperUrl,
+          fallbackBaseTitle,
+          inheritedFileSize,
+        );
+
+        if (!extractedStreams.length) {
+          console.log(`[MoviesDrive] No final streams resolved from wrapper ${episodeData.hubcloudWrapperUrl}`);
+          continue;
+        }
+
+        for (const stream of extractedStreams) {
+          const normalizedSource = this.normalizeSeriesSource(stream);
+          if (!normalizedSource) {
+            continue;
           }
-          
-          // Also check if the element itself is a link
-          if (nextElem.is('a')) {
-            const linkText = nextElem.text().toLowerCase();
-            if (linkText.includes('single') || linkText.includes('episode')) {
-              singleEpisodeLink = nextElem.attr('href');
-              break;
-            }
-          }
-          
-          nextElem = nextElem.next();
-          checkCount++;
-        }
-      }
-      
-      // Skip "Zip" links - only use "Single Episode" links
-      if (singleEpisodeLink && !singleEpisodeLink.toLowerCase().includes('zip')) {
-        qualityLinks.push({
-          quality: quality,
-          url: singleEpisodeLink,
-          source: 'Single Episode'
-        });
-      }
-    });
-    
-    return qualityLinks;
-  }
 
-  /**
-   * Extract episode links for a specific episode number
-   * Step 6 of series extraction
-   */
-  extractEpisodeLinks($, targetEpisodeNum) {
-    const wrappers = [];
-    const target = parseInt(targetEpisodeNum);
-    
-    // Episode patterns to match different naming conventions
-    const episodePatterns = [
-      /ep0?(\d+)/i,              // Ep01, Ep1, EP01, ep1
-      /episode\s*0?(\d+)/i,      // Episode 01, Episode 1, EPISODE 01
-      /e0?(\d+)/i,               // E01, E1, e01
-      /\s*0?(\d+)\s*[-–]/,       // 01 -, 1 -, 01 –
-      /^\s*0?(\d+)\s*$/          // Just "01" or "1" in the element
-    ];
-    
-    // Hosting provider patterns
-    const hostingProviders = [
-      'hubcloud',
-      'gdflix',
-      'gdlink',
-      'gdfilm',
-      'filezone',
-      'droplinks',
-      'verystream',
-      'uptobox',
-      'mixdrop',
-      'streamtape',
-      'pixeldrain',
-      'gofile'
-    ];
-    
-    $('h5').each((_, elem) => {
-      const $elem = $(elem);
-      const text = $elem.text();
-      
-      // Try to extract episode number using various patterns
-      let episodeNum = null;
-      
-      for (const pattern of episodePatterns) {
-        const match = text.match(pattern);
-        if (match) {
-          episodeNum = parseInt(match[1]);
-          break;
-        }
-      }
-      
-      // Filter: Only process if this is the requested episode
-      if (episodeNum === target) {
-        console.log(`[MoviesDrive] Found Ep${target}: ${text.substring(0, 100)}`);
-        
-        // Look for wrapper links in a broader context
-        // Check: 1) inside h5, 2) next siblings, 3) parent container, 4) all links after h5
-        
-        // Get the parent container (could be div, p, or other)
-        const $parent = $elem.parent();
-        
-        // Collect all potential wrapper URLs
-        const foundUrls = new Set();
-        
-        // Helper to extract provider links from an element
-        const extractFromElement = ($context) => {
-          hostingProviders.forEach(provider => {
-            $context.find(`a[href*="${provider}"]`).each((_, a) => {
-              const href = $(a).attr('href');
-              if (href && !foundUrls.has(href)) {
-                foundUrls.add(href);
-                wrappers.push({ url: href, source: provider.charAt(0).toUpperCase() + provider.slice(1) });
-                console.log(`[MoviesDrive]   → ${provider}: ${href.substring(0, 60)}`);
-              }
-            });
+          const finalUrl = String(stream?.url || '').trim();
+          if (!finalUrl.startsWith('http')) {
+            continue;
+          }
+
+          // Strict series mode: only final stream targets, never wrappers/intermediate hosts.
+          const finalLower = finalUrl.toLowerCase();
+          if (
+            finalLower.includes('mdrive.lol') ||
+            finalLower.includes('hubcloud') ||
+            finalLower.includes('gamerxyt') ||
+            finalLower.includes('carnewz') ||
+            finalLower.includes('cryptoinsights')
+          ) {
+            continue;
+          }
+
+          const streamDerivedBaseTitle = this.cleanSeriesHubCloudFilename(
+            this.extractPreferredSeriesBaseTitle(stream?.title),
+          );
+          const preferredBaseTitle =
+            wrapperMeta?.cleanBaseTitle ||
+            streamDerivedBaseTitle ||
+            fallbackBaseTitle;
+          const fileSize =
+            wrapperMeta?.fileSize ||
+            stream?.fileSize ||
+            this.extractFileSizeFromText(stream?.title) ||
+            inheritedFileSize;
+          const titleParts = [preferredBaseTitle];
+          if (!/\b(?:\d{3,4}p|4k)\b/i.test(preferredBaseTitle)) {
+            titleParts.push(`[${block.quality}p]`);
+          }
+          if (fileSize) {
+            titleParts.push(`[${fileSize}]`);
+          }
+          titleParts.push(`[${normalizedSource}]`);
+
+          allStreams.push({
+            ...stream,
+            url: finalUrl,
+            quality: block.quality,
+            source: normalizedSource,
+            fileSize: fileSize || null,
+            title: titleParts.join(' '),
+            _sizeMb: this.parseFileSizeToMB(fileSize),
           });
-        };
-        
-        // 1. Check inside the h5 itself
-        extractFromElement($elem);
-        
-        // 2. Check next siblings (up to 3 elements)
-        let nextElem = $elem.next();
-        let siblingCount = 0;
-        while (nextElem.length > 0 && siblingCount < 3) {
-          extractFromElement(nextElem);
-          nextElem = nextElem.next();
-          siblingCount++;
-        }
-        
-        // 3. Check parent container
-        if (foundUrls.size === 0) {
-          extractFromElement($parent);
-        }
-        
-        // 4. If still not found, look at all links in the document after this h5
-        if (foundUrls.size === 0) {
-          // Find the index of this h5 among all h5s
-          const allH5 = $('h5');
-          const currentIndex = allH5.index($elem);
-          
-          // Look at the next h5 to find the boundary
-          const nextH5 = allH5.eq(currentIndex + 1);
-          
-          // Get all links between this h5 and the next h5 (or end of document)
-          let $current = $elem;
-          while ($current.length > 0 && (!$current.is(nextH5))) {
-            if ($current.is('a')) {
-              const href = $current.attr('href');
-              if (href) {
-                hostingProviders.forEach(provider => {
-                  if (href.toLowerCase().includes(provider) && !foundUrls.has(href)) {
-                    foundUrls.add(href);
-                    wrappers.push({ url: href, source: provider.charAt(0).toUpperCase() + provider.slice(1) });
-                    console.log(`[MoviesDrive]   → ${provider}: ${href.substring(0, 60)}`);
-                  }
-                });
-              }
-            }
-            
-            // Check all links within this element
-            $current.find('a').each((_, a) => {
-              const href = $(a).attr('href');
-              if (href) {
-                hostingProviders.forEach(provider => {
-                  if (href.toLowerCase().includes(provider) && !foundUrls.has(href)) {
-                    foundUrls.add(href);
-                    wrappers.push({ url: href, source: provider.charAt(0).toUpperCase() + provider.slice(1) });
-                    console.log(`[MoviesDrive]   → ${provider}: ${href.substring(0, 60)}`);
-                  }
-                });
-              }
-            });
-            
-            $current = $current.next();
-            if ($current.length === 0) break;
-          }
         }
       }
+    } catch (error) {
+      console.error(`[MoviesDrive] Error extracting series:`, error.message);
+    }
+
+    // Highest resolution first, then larger file size, then FSL before Pixel.
+    const serverPriority = { FSL: 2, Pixel: 1 };
+    allStreams.sort((a, b) => {
+      if (b.quality !== a.quality) {
+        return b.quality - a.quality;
+      }
+
+      const sizeDiff = (b._sizeMb || 0) - (a._sizeMb || 0);
+      if (sizeDiff !== 0) {
+        return sizeDiff;
+      }
+
+      return (serverPriority[b.source] || 0) - (serverPriority[a.source] || 0);
     });
-    
-    return wrappers;
-  }
 
-  /**
-   * Convert quality string to pixel value
-   */
-  qualityToPixels(quality) {
-    const qualityMap = {
-      '4K': 2160,
-      '2160p': 2160,
-      '1080p': 1080,
-      '720p': 720,
-      '480p': 480,
-      '360p': 360,
-    };
-    return qualityMap[quality] || 720;
-  }
-
-  /**
-   * Deduplicate and sort streams
-   * Step 9 of series extraction
-   */
-  deduplicateAndSortStreams(streams) {
     const uniqueStreams = [];
     const seenUrls = new Set();
 
-    for (const stream of streams) {
-      if (!seenUrls.has(stream.url)) {
-        seenUrls.add(stream.url);
-        uniqueStreams.push(stream);
+    for (const stream of allStreams) {
+      if (seenUrls.has(stream.url)) {
+        continue;
       }
+
+      seenUrls.add(stream.url);
+      const { _sizeMb, ...cleanStream } = stream;
+      uniqueStreams.push(cleanStream);
     }
 
-    // Sort by quality (highest first)
-    uniqueStreams.sort((a, b) => {
-      const qualityA = a.metadata?.quality ? parseInt(a.metadata.quality.replace(/p/i, '')) : a.quality;
-      const qualityB = b.metadata?.quality ? parseInt(b.metadata.quality.replace(/p/i, '')) : b.quality;
-      return qualityB - qualityA;
-    });
-
+    console.log(`[MoviesDrive] Total streams: ${uniqueStreams.length}`);
     return uniqueStreams;
   }
+
 
   /**
    * Get all streams for a title

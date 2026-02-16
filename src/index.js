@@ -3,238 +3,301 @@
 /**
  * MoviesDrive Stremio Addon Server
  * Main entry point for the addon
- * Implements Stremio addon protocol
  */
 
 import 'dotenv/config';
 import express from 'express';
-import { streamHandler, manifestHandler, subtitlesHandler } from './handlers/streams.js';
+import { createRequire } from 'module';
+import { fileURLToPath } from 'url';
+import { securityHeaders, rateLimit, isValidImdbId, sanitizeString, isValidEpisodeNumber } from './security.js';
+import MoviesDriveScraper from './scrapers/moviesdrive.js';
+import {
+  serializeStreams,
+  serializeCatalog,
+  serializeMeta,
+  parseSeasonEpisode,
+  normalizeImdbId,
+  parseSeriesRouteId,
+} from './serializer.js';
 
-const PORT = process.env.PORT || 27828;
-// Use '0.0.0.0' to allow connections from any device on the network (Android TV, etc.)
-// Can be overridden with HOST environment variable for specific network configurations
-const HOST = process.env.HOST || '0.0.0.0';
+const require = createRequire(import.meta.url);
+const manifest = require('../manifest.json');
 
-// Log configuration for debugging
-console.log(`[Config] HOST=${HOST}, PORT=${PORT}`);
-
-// Create addon manifest
-const addonConfig = manifestHandler();
-
-// Create Express app
+// Initialize Express app
 const app = express();
 
-// Middleware
+// Security middleware
+app.use(securityHeaders);
+app.use(rateLimit);
+
+// Parse JSON bodies
 app.use(express.json());
 
-// Request logging middleware
-app.use((req, res, next) => {
-  const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url} from ${clientIp}`);
-  next();
-});
+// Initialize scraper
+const scraper = new MoviesDriveScraper();
 
-// Enable CORS for Stremio - Enhanced for cross-platform compatibility
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-  res.header('Access-Control-Expose-Headers', 'Content-Length, Content-Type');
-  res.header('Access-Control-Max-Age', '86400'); // 24 hours
-  
-  // Handle preflight requests
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(200);
-  }
-  
-  next();
-});
+// Server configuration
+const PORT = process.env.PORT || 27828;
+const HOST = process.env.HOST || '0.0.0.0';
+const isDirectExecution =
+  typeof process.argv[1] === 'string' &&
+  fileURLToPath(import.meta.url) === process.argv[1];
 
-// Routes
-app.get('/manifest.json', (req, res) => {
-  console.log('[Manifest] Serving manifest.json');
-  // Ensure proper content type for Stremio
-  res.setHeader('Content-Type', 'application/json');
-  res.json(addonConfig);
-});
-
-app.get('/stream/:type/:id.json', async (req, res) => {
-  try {
-    const { type, id } = req.params;
-    const season = req.query.season ? parseInt(req.query.season) : 1;
-    const episode = req.query.episode ? parseInt(req.query.episode) : 1;
-
-    const result = await streamHandler({
-      type,
-      id,
-      extra: { season, episode },
-    });
-
-    res.json(result);
-  } catch (error) {
-    console.error('Stream handler error:', error);
-    res.status(500).json({ error: error.message, streams: [] });
-  }
-});
-
-app.get('/subtitles/:type/:id.json', async (req, res) => {
-  try {
-    const { type, id } = req.params;
-
-    const result = await subtitlesHandler({
-      type,
-      id,
-    });
-
-    res.json(result);
-  } catch (error) {
-    console.error('Subtitles handler error:', error);
-    res.status(500).json({ error: error.message, subtitles: [] });
-  }
-});
-
-app.get('/meta/:type/:id.json', (req, res) => {
-  const { type, id } = req.params;
-  res.json({
-    meta: {
-      id,
-      type,
-      name: 'Content',
-    },
-  });
-});
-
-app.get('/catalog/:type/:id.json', (req, res) => {
-  res.json({
-    metas: [],
-  });
-});
-
-// Health check endpoint
+/**
+ * Health check endpoint
+ */
 app.get('/health', (req, res) => {
-  const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-  console.log(`[Health] Health check from ${clientIp}`);
   res.json({
     status: 'ok',
-    addon: 'MoviesDrive',
-    version: '1.0.0',
+    addon: manifest.name,
+    version: manifest.version,
     timestamp: new Date().toISOString(),
   });
 });
 
-// Info endpoint
-app.get('/info', (req, res) => {
-  res.json({
-    addon: addonConfig,
-    uptime: process.uptime(),
-  });
+/**
+ * Addon manifest endpoint
+ */
+app.get('/manifest.json', (req, res) => {
+  res.json(manifest);
 });
 
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({
-    error: 'Not Found',
-    path: req.path,
-  });
-});
-
-// Error handler
-app.use((err, req, res, next) => {
-  console.error('Express error:', err);
-  res.status(500).json({
-    error: 'Internal Server Error',
-    message: err.message,
-  });
-});
-
-// Start server
-const server = app.listen(PORT, HOST, async () => {
-  console.log(`🎬 MoviesDrive Stremio Addon Server`);
-  console.log(`📡 Server running at http://${HOST}:${PORT}`);
-  console.log(`📋 Manifest available at http://${HOST}:${PORT}/manifest.json`);
-  console.log(`💾 Node.js version: ${process.version}`);
-  console.log('');
-  
-  // Display connection info for different platforms
-  console.log('🔗 Connection URLs:');
-  console.log(`  Local (Desktop):    http://localhost:${PORT}/manifest.json`);
-  console.log(`  Network (All IPs):  http://0.0.0.0:${PORT}/manifest.json`);
-  
-  // Try to get all local IPs for Android TV connection
+/**
+ * Catalog endpoint
+ */
+app.get('/catalog/:type/:id.json', async (req, res) => {
   try {
-    const os = await import('os');
-    const interfaces = os.default.networkInterfaces();
-    let ipFound = false;
+    const { type, id } = req.params;
     
-    for (const name of Object.keys(interfaces)) {
-      for (const iface of interfaces[name]) {
-        // Skip internal and non-IPv4 addresses
-        if (iface.family === 'IPv4' && !iface.internal && iface.address) {
-          console.log(`  Android TV URL:     http://${iface.address}:${PORT}/manifest.json`);
-          ipFound = true;
-        }
+    // Validate type
+    if (!['movie', 'series'].includes(type)) {
+      return res.status(400).json({ error: 'Invalid type' });
+    }
+
+    // Search query if provided
+    const searchQuery = sanitizeString(req.query.search || '');
+
+    // This is a placeholder - in a real implementation, you'd fetch from MoviesDrive
+    // For now, return empty catalog
+    res.json({
+      metas: [],
+      cacheMaxAge: 3600,
+    });
+  } catch (error) {
+    console.error('[API] Catalog error:', error.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * Meta endpoint
+ */
+app.get('/meta/:type/:id.json', async (req, res) => {
+  try {
+    const { type, id } = req.params;
+    
+    // Validate IMDB ID
+    const imdbId = normalizeImdbId(id);
+    if (!imdbId) {
+      return res.status(400).json({ error: 'Invalid IMDB ID' });
+    }
+
+    // Validate type
+    if (!['movie', 'series'].includes(type)) {
+      return res.status(400).json({ error: 'Invalid type' });
+    }
+
+    // Search for the item
+    const result = await scraper.searchAndGetDocument(imdbId);
+    
+    if (!result || !result.document) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+
+    // Extract basic info from the document
+    const $ = result.document;
+    const title = $('h1').first().text() || 'Unknown';
+    const description = $('meta[name="description"]').attr('content') || '';
+    const poster = $('meta[property="og:image"]').attr('content') || '';
+
+    const meta = {
+      id: imdbId,
+      type: type,
+      name: title,
+      description: description,
+      poster: poster,
+      background: poster,
+    };
+
+    res.json({ meta });
+  } catch (error) {
+    console.error('[API] Meta error:', error.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+/**
+ * Stream endpoint - Main endpoint for getting streaming links
+ */
+app.get('/stream/:type/:id.json', async (req, res) => {
+  try {
+    const { type, id } = req.params;
+
+    const seriesRouteData = type === 'series' ? parseSeriesRouteId(id) : null;
+    const imdbId = seriesRouteData?.imdbId || normalizeImdbId(id);
+
+    // Validate IMDB ID
+    if (!imdbId) {
+      console.warn(`[API] Invalid IMDB ID: ${id}`);
+      return res.status(400).json({ 
+        error: 'Invalid IMDB ID',
+        streams: [] 
+      });
+    }
+
+    // Validate type
+    if (!['movie', 'series'].includes(type)) {
+      return res.status(400).json({ 
+        error: 'Invalid type',
+        streams: [] 
+      });
+    }
+
+    console.log(`[API] Stream request: ${type} ${imdbId}`);
+
+    let streams = [];
+
+    if (type === 'movie') {
+      // Extract movie streams
+      streams = await scraper.extractMovieStreams(imdbId);
+    } else if (type === 'series') {
+      // Route tuple values take precedence over query params.
+      const { season, episode } = parseSeasonEpisode(req.query, {
+        season: seriesRouteData?.season,
+        episode: seriesRouteData?.episode,
+      });
+      
+      // Validate season and episode
+      if (!isValidEpisodeNumber(season) || !isValidEpisodeNumber(episode)) {
+        return res.status(400).json({ 
+          error: 'Invalid season or episode',
+          streams: [] 
+        });
       }
+
+      console.log(`[API] Series request: S${season}E${episode}`);
+      
+      // Extract series streams
+      streams = await scraper.extractSeriesStreams(imdbId, season, episode);
     }
+
+    // Serialize streams for Stremio
+    const response = serializeStreams(streams, imdbId);
     
-    if (!ipFound) {
-      console.log('  ⚠️  No external IP found. Check network connection.');
+    console.log(`[API] Returning ${response.streams.length} stream(s)`);
+    
+    // Set cache headers
+    res.setHeader('Cache-Control', 'public, max-age=300'); // 5 minutes
+    
+    res.json(response);
+  } catch (error) {
+    console.error('[API] Stream error:', error.message);
+    res.status(500).json({ 
+      error: 'Internal server error',
+      streams: [] 
+    });
+  }
+});
+
+/**
+ * Subtitles endpoint
+ */
+app.get('/subtitles/:type/:id.json', async (req, res) => {
+  try {
+    const { type, id } = req.params;
+    
+    // Validate IMDB ID
+    const imdbId = normalizeImdbId(id);
+    if (!imdbId) {
+      return res.status(400).json({ error: 'Invalid IMDB ID' });
     }
-  } catch (err) {
-    console.log('  ⚠️  Could not detect network interfaces');
+
+    // Get subtitles
+    const subtitles = await scraper.getSubtitles(imdbId);
+    
+    res.json({ subtitles });
+  } catch (error) {
+    console.error('[API] Subtitles error:', error.message);
+    res.json({ subtitles: [] });
   }
-  
-  console.log('');
-  console.log('📱 To connect from Android TV:');
-  console.log('   1. Make sure this PC and Android TV are on the same WiFi');
-  console.log('   2. Use one of the "Android TV URL" addresses above');
-  console.log('   3. If connection fails, check Windows Firewall settings');
-  console.log('');
-  console.log('🔧 Windows Firewall Fix:');
-  console.log('   Run PowerShell as Admin and execute:');
-  console.log(`   netsh advfirewall firewall add rule name="Stremio Addon" dir=in action=allow protocol=TCP localport=${PORT}`);
-  console.log('');
-  console.log('Usage:');
-  console.log(`  Stream:    http://${HOST}:${PORT}/stream/:type/:id.json`);
-  console.log(`  Subtitles: http://${HOST}:${PORT}/subtitles/:type/:id.json`);
-  console.log(`  Meta:      http://${HOST}:${PORT}/meta/:type/:id.json`);
-  console.log(`  Health:    http://${HOST}:${PORT}/health`);
 });
 
-// Log when server actually starts listening
-server.on('listening', () => {
-  const addr = server.address();
-  console.log(`[Server] Listening on ${addr.address}:${addr.port}`);
-});
-
-// Handle server errors
-server.on('error', (err) => {
-  if (err.code === 'EADDRINUSE') {
-    console.error(`❌ Port ${PORT} is already in use. Try: PORT=${parseInt(PORT)+1} npm start`);
-  } else {
-    console.error('❌ Server error:', err.message);
-  }
-  process.exit(1);
-});
-
-// Graceful shutdown
-process.on('SIGINT', () => {
-  console.log('\n🛑 Shutting down gracefully...');
-  server.close(() => {
-    console.log('✅ Server closed');
-    process.exit(0);
+/**
+ * Cache stats endpoint (for debugging)
+ */
+app.get('/info', (req, res) => {
+  const stats = scraper.getCacheStats();
+  res.json({
+    addon: manifest.name,
+    version: manifest.version,
+    cache: stats,
+    uptime: process.uptime(),
+    memory: process.memoryUsage(),
   });
 });
 
-process.on('SIGTERM', () => {
-  console.log('\n🛑 Termination signal received...');
-  server.close(() => {
-    process.exit(0);
+/**
+ * Clear cache endpoint (for debugging)
+ */
+app.post('/clear-cache', (req, res) => {
+  scraper.clearCache();
+  res.json({ message: 'Cache cleared' });
+});
+
+/**
+ * Error handling middleware
+ */
+app.use((err, req, res, next) => {
+  console.error('[API] Unhandled error:', err.message);
+  res.status(500).json({ 
+    error: 'Internal server error',
+    message: process.env.NODE_ENV === 'development' ? err.message : undefined
   });
 });
 
-// Unhandled rejection handler
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+/**
+ * 404 handler
+ */
+app.use((req, res) => {
+  res.status(404).json({ error: 'Not found' });
 });
+
+if (isDirectExecution) {
+  // Start server only when executed directly (not when imported by Vercel).
+  app.listen(PORT, HOST, () => {
+    console.log('🎬 MoviesDrive Stremio Addon Server');
+    console.log(`📡 Server running at http://${HOST}:${PORT}`);
+    console.log(`📋 Manifest available at http://${HOST}:${PORT}/manifest.json`);
+    console.log(`💾 Node.js version: ${process.version}`);
+    console.log('');
+    console.log('Usage:');
+    console.log(`  Stream:    http://${HOST}:${PORT}/stream/:type/:id.json`);
+    console.log(`  Subtitles: http://${HOST}:${PORT}/subtitles/:type/:id.json`);
+    console.log(`  Meta:      http://${HOST}:${PORT}/meta/:type/:id.json`);
+    console.log(`  Health:    http://${HOST}:${PORT}/health`);
+    console.log('');
+  });
+
+  // Graceful shutdown
+  process.on('SIGTERM', () => {
+    console.log('🛑 SIGTERM received, shutting down gracefully');
+    process.exit(0);
+  });
+
+  process.on('SIGINT', () => {
+    console.log('🛑 SIGINT received, shutting down gracefully');
+    process.exit(0);
+  });
+}
 
 export default app;

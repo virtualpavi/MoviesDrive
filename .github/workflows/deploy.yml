@@ -1,4 +1,4 @@
-name: Deploy to Vercel
+name: CI
 
 on:
   push:
@@ -9,23 +9,30 @@ on:
       - main
 
 jobs:
-  deploy:
+  checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Setup Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-version: '20'
-          
+          node-version: "20"
+          cache: "npm"
+
       - name: Install dependencies
         run: npm ci
-        
-      - name: Deploy to Vercel
-        uses: vercel/action-deploy@v1
-        with:
-          vercel-token: ${{ secrets.VERCEL_TOKEN }}
-          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
-          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
-          vercel-args: '--prod'
+
+      - name: Validate Vercel entrypoint import
+        run: npm run check:vercel-entry
+
+      - name: Syntax checks
+        run: |
+          node --check src/index.js
+          node --check api/index.js
+          node --check src/scrapers/moviesdrive.js
+          node --check src/link-resolver.js
+
+      - name: Run unit tests
+        run: node --test tests/*.test.js

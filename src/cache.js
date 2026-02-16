@@ -1,111 +1,71 @@
 /**
- * Cache Module
- * Implements a simple in-memory caching layer with TTL support
- * Based on the MOVIESDRIVE_STREMIO_ADDON.md caching strategy
+ * Cache Manager Module
+ * Provides in-memory caching with TTL and LRU cleanup
  */
 
 class CacheManager {
   constructor(options = {}) {
+    this.ttl = options.ttl || 3600000; // Default 1 hour in ms
+    this.maxSize = options.maxSize || 500;
     this.cache = new Map();
-    this.ttl = options.ttl || 7200000; // 2 hours default (7200 seconds)
-    this.maxSize = options.maxSize || 1000; // Max entries
-    this.cleanupInterval = options.cleanupInterval || 600000; // 10 minutes
-
-    
-    // Periodic cleanup of expired entries
-    this.cleanup();
   }
 
   /**
-   * Get cached value
+   * Get item from cache
    * @param {string} key - Cache key
-   * @returns {*} Cached value or null if expired/missing
+   * @returns {any|null} Cached value or null if expired/not found
    */
   get(key) {
-    if (!this.cache.has(key)) {
+    const item = this.cache.get(key);
+    
+    if (!item) {
       return null;
     }
 
-    const entry = this.cache.get(key);
-    
     // Check if expired
-    if (Date.now() - entry.timestamp > this.ttl) {
+    if (Date.now() > item.expiry) {
       this.cache.delete(key);
       return null;
     }
 
-    return entry.value;
+    return item.value;
   }
 
   /**
-   * Set cache value
+   * Set item in cache
    * @param {string} key - Cache key
-   * @param {*} value - Value to cache
-   * @param {number} ttl - Optional TTL override in milliseconds
+   * @param {any} value - Value to cache
+   * @param {number} customTtl - Optional custom TTL in ms
    */
-  set(key, value, ttl = null) {
-    // Evict old entries if cache is full
-    if (this.cache.size >= this.maxSize) {
-      const oldestKey = Array.from(this.cache.entries())
-        .sort((a, b) => a[1].timestamp - b[1].timestamp)[0][0];
-      this.cache.delete(oldestKey);
+  set(key, value, customTtl) {
+    // Enforce max size with LRU eviction
+    if (this.cache.size >= this.maxSize && !this.cache.has(key)) {
+      // Delete oldest entry (first in Map)
+      const firstKey = this.cache.keys().next().value;
+      this.cache.delete(firstKey);
     }
 
+    const ttl = customTtl || this.ttl;
+    
     this.cache.set(key, {
       value,
-      timestamp: Date.now(),
-      ttl: ttl || this.ttl,
+      expiry: Date.now() + ttl,
     });
   }
 
   /**
-   * Check if key exists and is not expired
-   * @param {string} key - Cache key
-   * @returns {boolean} True if key exists and is valid
-   */
-  has(key) {
-    return this.get(key) !== null;
-  }
-
-  /**
-   * Clear specific cache entry
+   * Delete item from cache
    * @param {string} key - Cache key
    */
-  clear(key) {
+  delete(key) {
     this.cache.delete(key);
   }
 
   /**
-   * Clear all cache entries
+   * Clear all cache
    */
   clearAll() {
     this.cache.clear();
-  }
-
-  /**
-   * Get cache size
-   * @returns {number} Number of cached entries
-   */
-  size() {
-    return this.cache.size;
-  }
-
-  /**
-   * Periodic cleanup of expired entries
-   */
-  cleanup() {
-    setInterval(() => {
-      let cleaned = 0;
-      for (const [key, entry] of this.cache.entries()) {
-        if (Date.now() - entry.timestamp > entry.ttl) {
-          this.cache.delete(key);
-          cleaned++;
-        }
-      }
-      if (cleaned > 0) {
-        console.debug(`[Cache] Cleaned up ${cleaned} expired entries`);
-      }
-    }, this.cleanupInterval);
   }
 
   /**
@@ -113,11 +73,39 @@ class CacheManager {
    * @returns {Object} Cache stats
    */
   stats() {
+    let expired = 0;
+    const now = Date.now();
+
+    for (const [key, item] of this.cache.entries()) {
+      if (now > item.expiry) {
+        expired++;
+      }
+    }
+
     return {
       size: this.cache.size,
       maxSize: this.maxSize,
-      utilization: `${((this.cache.size / this.maxSize) * 100).toFixed(2)}%`,
+      expired,
+      ttl: this.ttl,
     };
+  }
+
+  /**
+   * Clean up expired entries
+   * @returns {number} Number of entries removed
+   */
+  cleanup() {
+    const now = Date.now();
+    let removed = 0;
+
+    for (const [key, item] of this.cache.entries()) {
+      if (now > item.expiry) {
+        this.cache.delete(key);
+        removed++;
+      }
+    }
+
+    return removed;
   }
 }
 

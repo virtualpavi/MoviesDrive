@@ -6,6 +6,7 @@
 
 import HttpClient from './http-client.js';
 import LinkResolver from './link-resolver.js';
+import { isWrapperUrl } from './security.js';
 import { load } from 'cheerio';
 
 class SourceExtractors {
@@ -17,41 +18,52 @@ class SourceExtractors {
   /**
    * Extract from various hosting providers
    * @param {string} url - Hosting provider URL
+   * @param {string} title - Optional title for the stream
+   * @param {string} fileSize - Optional file size
    * @returns {Promise<Array<Object>>} Array of extracted stream objects
    */
-  async extractFromUrl(url) {
+  async extractFromUrl(url, title = '', fileSize = '') {
     if (!url) return [];
 
     const urlLower = url.toLowerCase();
     console.log(`[Extractor] Extracting from: ${urlLower.substring(0, 50)}...`);
+    if (title) {
+      console.log(`[Extractor] Title: ${title}`);
+    }
 
     try {
       // Check if this is a wrapper URL that needs resolution through redirect chain
-      if (this.linkResolver.isWrapperUrl(url)) {
+      if (isWrapperUrl(url)) {
         console.log(`[Extractor] Detected wrapper URL, resolving through redirect chain`);
-        return await this.linkResolver.resolveWrapperUrl(url);
+        const streams = await this.linkResolver.resolveWrapperUrl(url);
+        // Add title and fileSize to each stream
+        return streams.map(s => ({
+          ...s,
+          title: s.title || title,
+          fileSize: s.fileSize || fileSize
+        }));
       }
 
       // Route to appropriate extractor
       if (urlLower.includes('hubcloud') || urlLower.includes('gdrive')) {
-        return await this.extractGDrive(url);
+        return await this.extractGDrive(url, title, fileSize);
       } else if (urlLower.includes('streamtape') || urlLower.includes('streamta.pe')) {
-        return await this.extractStreamTape(url);
+        return await this.extractStreamTape(url, title, fileSize);
       } else if (urlLower.includes('mixdrop')) {
-        return await this.extractMixDrop(url);
+        return await this.extractMixDrop(url, title, fileSize);
       } else if (urlLower.includes('pixeldrain')) {
-        return await this.extractPixelDrain(url);
+        return await this.extractPixelDrain(url, title, fileSize);
       } else if (urlLower.includes('gofile')) {
-        return await this.extractGoFile(url);
+        return await this.extractGoFile(url, title, fileSize);
       } else if (urlLower.includes('gdflix')) {
-        return await this.extractGDFlix(url);
+        return await this.extractGDFlix(url, title, fileSize);
       } else if (urlLower.includes('gdlink')) {
-        return await this.extractGDLink(url);
+        return await this.extractGDLink(url, title, fileSize);
       } else if (urlLower.includes('fsl')) {
-        return await this.extractFSL(url);
+        return await this.extractFSL(url, title, fileSize);
       } else {
         // Try generic extraction
-        return await this.extractGeneric(url);
+        return await this.extractGeneric(url, title, fileSize);
       }
     } catch (error) {
       console.error(`[Extractor] Error extracting from ${url}:`, error.message);
@@ -62,7 +74,7 @@ class SourceExtractors {
   /**
    * Extract from GDrive/HubCloud
    */
-  async extractGDrive(url) {
+  async extractGDrive(url, title = '', fileSize = '') {
     try {
       const response = await this.http.get(url, { timeout: 20000 });
       const text = typeof response.text === 'string' ? response.text : JSON.stringify(response.text);
@@ -70,46 +82,50 @@ class SourceExtractors {
 
       const streams = [];
 
-      // Look for download button
-      const downloadBtn = $('a:contains("Download"), a.btn-primary, button:contains("Download")').first();
-      if (downloadBtn.length) {
-        const href = downloadBtn.attr('href') || downloadBtn.attr('onclick') || '';
-        if (href) {
-          streams.push({
-            url: href.replace(/onclick=['"].*?window.location=['"](.+?)['"].*?['"]/, '$1') || href,
-            quality: 1080,
-            source: 'GDrive',
-          });
-        }
-      }
+      // Look for Google Drive download links
+      $('a[href*="drive.google.com"], a[href*="/uc?"], a[href*="export=download"]').each((_, elem) => {
+        const $elem = $(elem);
+        let href = $elem.attr('href');
 
-      // Look for direct download links
-      $('a[href*="/uc?"], a[href*="export?gid"]').each((_, elem) => {
-        const href = $(elem).attr('href');
-        if (href && href.includes('drive.google')) {
+        if (href) {
+          // Ensure it's a full URL
+          if (!href.startsWith('http')) {
+            href = new URL(href, url).href;
+          }
+
+          // Extract quality from button text
+          const buttonText = $elem.text() || '';
+          const quality = this.extractQualityFromText(buttonText);
+
           streams.push({
             url: href,
-            quality: 1080,
+            quality: quality,
             source: 'GDrive',
+            title: title,
+            fileSize: fileSize,
           });
         }
       });
 
-      // Extract from script tags (often contains download links)
-      $('script').each((_, elem) => {
-        const text = $(elem).text();
-        const match = text.match(/window.location\s*=\s*['"]([^'"]+)['"]/);
-        if (match) {
-          streams.push({
-            url: match[1],
-            quality: 1080,
-            source: 'GDrive',
-          });
-        }
-      });
+      // Also check for JavaScript redirects to Google Drive
+      const scriptText = $('script').text();
+      const driveMatch = scriptText.match(/window\.location\s*=\s*['"](https:\/\/drive\.google\.com\/[^'"]+)['"]/i);
+      if (driveMatch) {
+        streams.push({
+          url: driveMatch[1],
+          quality: 1080,
+          source: 'GDrive',
+          title: title,
+          fileSize: fileSize,
+        });
+      }
 
       console.debug(`[GDrive] Found ${streams.length} stream(s)`);
-      return streams;
+      return streams.map(s => ({
+        ...s,
+        title: s.title || title,
+        fileSize: s.fileSize || fileSize,
+      }));
     } catch (error) {
       console.error(`[GDrive] Error:`, error.message);
       return [];
@@ -119,7 +135,7 @@ class SourceExtractors {
   /**
    * Extract from StreamTape
    */
-  async extractStreamTape(url) {
+  async extractStreamTape(url, title = '', fileSize = '') {
     try {
       const response = await this.http.get(url, { timeout: 20000 });
       const text = typeof response.text === 'string' ? response.text : JSON.stringify(response.text);
@@ -127,43 +143,42 @@ class SourceExtractors {
 
       const streams = [];
 
-      // StreamTape usually has the video source in a script tag
+      // Look for video source in script tags
       const scriptText = $('script').text();
+      const videoMatch = scriptText.match(/sources:\s*\[\s*\{[^}]*src:\s*['"]([^'"]+)['"]/);
       
-      // Look for video source patterns
-      const patterns = [
-        /sources:\s*\[\s*{\s*src:\s*["']([^"']+)["']/,
-        /src=['"]([^'"]*?\.m3u8[^'"]*?)['"] /,
-        /https:.*?\/media\/\d+\/[^"'\s]+/,
-      ];
-
-      for (const pattern of patterns) {
-        const match = scriptText.match(pattern);
-        if (match && match[1]) {
-          streams.push({
-            url: match[1],
-            quality: 720,
-            source: 'StreamTape',
-          });
-          break;
-        }
+      if (videoMatch) {
+        streams.push({
+          url: videoMatch[1],
+          quality: 720,
+          source: 'StreamTape',
+          title: title,
+          fileSize: fileSize,
+        });
       }
 
-      // Look for download button
-      const downloadBtn = $('a:contains("Download"), a.btn-download').first();
-      if (downloadBtn.length && streams.length === 0) {
-        const href = downloadBtn.attr('href');
-        if (href) {
+      // Also check for download button
+      $('a[href*="download"], button[data-url]').each((_, elem) => {
+        const $elem = $(elem);
+        const href = $elem.attr('href') || $elem.attr('data-url');
+        
+        if (href && href.includes('stream')) {
           streams.push({
             url: href,
             quality: 720,
             source: 'StreamTape',
+            title: title,
+            fileSize: fileSize,
           });
         }
-      }
+      });
 
       console.debug(`[StreamTape] Found ${streams.length} stream(s)`);
-      return streams;
+      return streams.map(s => ({
+        ...s,
+        title: s.title || title,
+        fileSize: s.fileSize || fileSize,
+      }));
     } catch (error) {
       console.error(`[StreamTape] Error:`, error.message);
       return [];
@@ -173,7 +188,7 @@ class SourceExtractors {
   /**
    * Extract from MixDrop
    */
-  async extractMixDrop(url) {
+  async extractMixDrop(url, title = '', fileSize = '') {
     try {
       const response = await this.http.get(url, { timeout: 20000 });
       const text = typeof response.text === 'string' ? response.text : JSON.stringify(response.text);
@@ -181,29 +196,42 @@ class SourceExtractors {
 
       const streams = [];
 
-      // MixDrop embeds video source in HTML5 video tag or iframe
-      const videoSource = $('source').attr('src');
-      if (videoSource) {
-        streams.push({
-          url: videoSource,
-          quality: 720,
-          source: 'MixDrop',
-        });
-      }
+      // Look for HTML5 video sources
+      $('video source, video').each((_, elem) => {
+        const $elem = $(elem);
+        const src = $elem.attr('src') || $elem.find('source').attr('src');
+        
+        if (src) {
+          streams.push({
+            url: src,
+            quality: 720,
+            source: 'MixDrop',
+            title: title,
+            fileSize: fileSize,
+          });
+        }
+      });
 
-      // Or look in script
+      // Also check for script-embedded sources
       const scriptText = $('script').text();
-      const match = scriptText.match(/["'](https:.*?\.m3u8.*?)["']/);
-      if (match && match[1]) {
+      const wurlMatch = scriptText.match(/wurl\s*=\s*["']([^"']+)["']/);
+      if (wurlMatch) {
+        const videoUrl = 'https://' + wurlMatch[1];
         streams.push({
-          url: match[1],
+          url: videoUrl,
           quality: 720,
           source: 'MixDrop',
+          title: title,
+          fileSize: fileSize,
         });
       }
 
       console.debug(`[MixDrop] Found ${streams.length} stream(s)`);
-      return streams;
+      return streams.map(s => ({
+        ...s,
+        title: s.title || title,
+        fileSize: s.fileSize || fileSize,
+      }));
     } catch (error) {
       console.error(`[MixDrop] Error:`, error.message);
       return [];
@@ -213,27 +241,28 @@ class SourceExtractors {
   /**
    * Extract from PixelDrain
    */
-  async extractPixelDrain(url) {
+  async extractPixelDrain(url, title = '', fileSize = '') {
     try {
-      // PixelDrain URLs are direct links, just need to validate format
-      if (url.includes('pixeldrain')) {
-        // Convert /u/ format to /api/file/ format if needed
-        const fileId = this.extractPixelDrainId(url);
-        if (fileId) {
-          const apiUrl = `https://pixeldrain.dev/api/file/${fileId}?download`;
-          console.log(`[PixelDrain] Converted /u/${fileId} to API URL: ${apiUrl}`);
-          return [{
-            url: apiUrl,
-            quality: 1080,
-            source: 'PixelDrain',
-          }];
-        }
-
-        // If already in API format or can't extract ID, return as-is
+      // Check if this is a zip file
+      if (url.includes('zip') || url.includes('archive')) {
+        console.log(`[PixelDrain] Processing zip file: ${url}`);
+        return await this.extractZipFile(url, title, fileSize);
+      }
+      
+      // PixelDrain URLs are already direct links, just need to convert format
+      const fileId = this.extractPixelDrainId(url);
+      
+      if (fileId) {
+        // Convert to API download URL
+        const apiUrl = `https://pixeldrain.dev/api/file/${fileId}?download`;
+        console.log(`[PixelDrain] Converted ${url} to API URL: ${apiUrl}`);
+        
         return [{
-          url: url,
+          url: apiUrl,
           quality: 1080,
           source: 'PixelDrain',
+          title: title,
+          fileSize: fileSize,
         }];
       }
 
@@ -246,27 +275,16 @@ class SourceExtractors {
 
   /**
    * Extract PixelDrain file ID from URL
-   * Supports multiple URL formats:
-   * - https://pixeldrain.dev/u/FILEID
-   * - https://pixeldrain.com/u/FILEID
-   * - https://pixeldrain.dev/api/file/FILEID
-   * Returns: FILEID or null
+   * Supports both /u/FILEID and /api/file/FILEID patterns
    */
   extractPixelDrainId(url) {
-    if (!url) return null;
+    // Match /u/FILEID pattern
+    const uMatch = url.match(/pixeldrain\.dev\/u\/([a-zA-Z0-9]+)/);
+    if (uMatch) return uMatch[1];
     
-    // Try various PixelDrain URL patterns
-    const patterns = [
-      /pixeldrain\.(?:dev|com)\/u\/([a-zA-Z0-9]+)/i,
-      /pixeldrain\.(?:dev|com)\/api\/file\/([a-zA-Z0-9]+)/i,
-    ];
-    
-    for (const pattern of patterns) {
-      const match = url.match(pattern);
-      if (match) {
-        return match[1];
-      }
-    }
+    // Match /api/file/FILEID pattern
+    const apiMatch = url.match(/pixeldrain\.dev\/api\/file\/([a-zA-Z0-9]+)/);
+    if (apiMatch) return apiMatch[1];
     
     return null;
   }
@@ -274,7 +292,7 @@ class SourceExtractors {
   /**
    * Extract from GoFile
    */
-  async extractGoFile(url) {
+  async extractGoFile(url, title = '', fileSize = '') {
     try {
       const response = await this.http.get(url, { timeout: 20000 });
       const text = typeof response.text === 'string' ? response.text : JSON.stringify(response.text);
@@ -282,20 +300,28 @@ class SourceExtractors {
 
       const streams = [];
 
-      // Look for download links
-      $('a.btn-primary, a[href*="download"]').each((_, elem) => {
-        const href = $(elem).attr('href');
-        if (href && href.startsWith('http')) {
+      // Look for download buttons
+      $('a[href*="download"], button[data-url], a.btn-primary').each((_, elem) => {
+        const $elem = $(elem);
+        const href = $elem.attr('href') || $elem.attr('data-url');
+        
+        if (href) {
           streams.push({
             url: href,
             quality: 720,
             source: 'GoFile',
+            title: title,
+            fileSize: fileSize,
           });
         }
       });
 
       console.debug(`[GoFile] Found ${streams.length} stream(s)`);
-      return streams;
+      return streams.map(s => ({
+        ...s,
+        title: s.title || title,
+        fileSize: s.fileSize || fileSize,
+      }));
     } catch (error) {
       console.error(`[GoFile] Error:`, error.message);
       return [];
@@ -305,7 +331,7 @@ class SourceExtractors {
   /**
    * Extract from GDFlix
    */
-  async extractGDFlix(url) {
+  async extractGDFlix(url, title = '', fileSize = '') {
     try {
       const response = await this.http.get(url, { timeout: 20000 });
       const text = typeof response.text === 'string' ? response.text : JSON.stringify(response.text);
@@ -313,31 +339,39 @@ class SourceExtractors {
 
       const streams = [];
 
-      // GDFlix usually shows download options
-      $('a[href*="download"], button.download, a.btn-success').each((_, elem) => {
+      // Look for Google Drive links or download buttons
+      $('a[href*="drive"], a.btn-primary, button[data-url], a[href*="download"]').each((_, elem) => {
         const $elem = $(elem);
-        let href = $elem.attr('href');
+        let href = $elem.attr('href') || $elem.attr('data-url');
 
-        if (!href) {
-          const onclick = $elem.attr('onclick') || '';
-          const match = onclick.match(/['"]([^'"]*drive[^'"]*)['"]/i);
-          if (match) href = match[1];
-        }
+        if (href) {
+          // Ensure it's a full URL
+          if (!href.startsWith('http')) {
+            href = new URL(href, url).href;
+          }
 
-        if (href && (href.includes('drive') || href.startsWith('http'))) {
-          const text = $elem.text().trim();
-          const quality = text.includes('1080') ? 1080 : 720;
-          
-          streams.push({
-            url: href,
-            quality: quality,
-            source: 'GDFlix',
-          });
+          // Extract quality from button text
+          const buttonText = $elem.text() || '';
+          const quality = this.extractQualityFromText(buttonText);
+
+          if (href.includes('drive') || href.includes('download')) {
+            streams.push({
+              url: href,
+              quality: quality,
+              source: 'GDFlix',
+              title: title,
+              fileSize: fileSize,
+            });
+          }
         }
       });
 
       console.debug(`[GDFlix] Found ${streams.length} stream(s)`);
-      return streams;
+      return streams.map(s => ({
+        ...s,
+        title: s.title || title,
+        fileSize: s.fileSize || fileSize,
+      }));
     } catch (error) {
       console.error(`[GDFlix] Error:`, error.message);
       return [];
@@ -347,7 +381,7 @@ class SourceExtractors {
   /**
    * Extract from GDLink
    */
-  async extractGDLink(url) {
+  async extractGDLink(url, title = '', fileSize = '') {
     try {
       const response = await this.http.get(url, { timeout: 20000 });
       const text = typeof response.text === 'string' ? response.text : JSON.stringify(response.text);
@@ -365,12 +399,18 @@ class SourceExtractors {
             url: href,
             quality: 720,
             source: 'GDLink',
+            title: title,
+            fileSize: fileSize,
           });
         }
       });
 
       console.debug(`[GDLink] Found ${streams.length} stream(s)`);
-      return streams;
+      return streams.map(s => ({
+        ...s,
+        title: s.title || title,
+        fileSize: s.fileSize || fileSize,
+      }));
     } catch (error) {
       console.error(`[GDLink] Error:`, error.message);
       return [];
@@ -380,7 +420,7 @@ class SourceExtractors {
   /**
    * Extract from FSL Server
    */
-  async extractFSL(url) {
+  async extractFSL(url, title = '', fileSize = '') {
     try {
       // FSL URLs are usually direct streaming URLs
       if (url.includes('fsl')) {
@@ -388,6 +428,8 @@ class SourceExtractors {
           url: url,
           quality: 1080,
           source: 'FSL Server',
+          title: title,
+          fileSize: fileSize,
         }];
       }
 
@@ -401,7 +443,7 @@ class SourceExtractors {
   /**
    * Generic extractor for unknown hosts
    */
-  async extractGeneric(url) {
+  async extractGeneric(url, title = '', fileSize = '') {
     try {
       const response = await this.http.get(url, { timeout: 20000 });
       const text = typeof response.text === 'string' ? response.text : JSON.stringify(response.text);
@@ -429,6 +471,8 @@ class SourceExtractors {
                 url: href,
                 quality: 720,
                 source: 'Direct',
+                title: title,
+                fileSize: fileSize,
               });
             }
           }
@@ -438,11 +482,135 @@ class SourceExtractors {
       }
 
       console.debug(`[Generic] Found ${streams.length} stream(s)`);
-      return streams;
+      return streams.map(s => ({
+        ...s,
+        title: s.title || title,
+        fileSize: s.fileSize || fileSize,
+      }));
     } catch (error) {
       console.error(`[Generic] Error:`, error.message);
       return [];
     }
+  }
+
+  /**
+   * Extract from zip files
+   */
+  async extractZipFile(url, title = '', fileSize = '') {
+    try {
+      console.log(`[ZipExtractor] Extracting from zip file: ${url}`);
+      
+      // For zip files, we need to extract the file list and find video files
+      // This is a simplified approach - in a real implementation, you'd need
+      // to download and parse the zip file contents
+      
+      const response = await this.http.get(url, { timeout: 30000 });
+      const text = typeof response.text === 'string' ? response.text : JSON.stringify(response.text);
+      const $ = load(text);
+
+      const streams = [];
+
+      // Look for file links in the zip file listing
+      $('a[href]').each((_, elem) => {
+        const $elem = $(elem);
+        const href = $elem.attr('href');
+        const linkText = $elem.text();
+        
+        if (href && (href.includes('.mkv') || href.includes('.mp4') || href.includes('.avi'))) {
+          // Extract quality and other metadata from filename
+          const filename = href.split('/').pop() || linkText;
+          const metadata = this.extractMetadataFromFilename(filename);
+          
+          streams.push({
+            url: href.startsWith('http') ? href : new URL(href, url).href,
+            quality: metadata.quality,
+            source: 'Zip Archive',
+            title: metadata.title,
+            fileSize: metadata.fileSize,
+          });
+        }
+      });
+
+      console.debug(`[ZipExtractor] Found ${streams.length} stream(s) in zip file`);
+      return streams.map(s => ({
+        ...s,
+        title: s.title || title,
+        fileSize: s.fileSize || fileSize,
+      }));
+    } catch (error) {
+      console.error(`[ZipExtractor] Error:`, error.message);
+      return [];
+    }
+  }
+
+  /**
+   * Extract metadata from filename
+   * Format: Landman.S01E01.1080p.BluRay.Hindi.2.0-English.5.1.ESub.x264 [FSL / PIXEL SERVER] [resolution] [file size]
+   */
+  extractMetadataFromFilename(filename) {
+    const filenameLower = filename.toLowerCase();
+    
+    // Extract episode info
+    const episodeMatch = filenameLower.match(/s(\d+)e(\d+)/);
+    const season = episodeMatch ? parseInt(episodeMatch[1]) : 1;
+    const episode = episodeMatch ? parseInt(episodeMatch[2]) : 1;
+    
+    // Extract quality
+    const quality = this.extractQualityFromText(filename);
+    
+    // Extract file size
+    const sizeMatch = filenameLower.match(/(\d+\.?\d*)\s*(gb|mb)/i);
+    const fileSize = sizeMatch ? `${sizeMatch[1]} ${sizeMatch[2].toUpperCase()}` : '';
+    
+    // Extract source/server info
+    const sourceMatch = filenameLower.match(/\[(.*?)\]/);
+    const source = sourceMatch ? sourceMatch[1] : 'Unknown';
+    
+    // Create title in the requested format
+    const title = `${filename.split('.')[0]} [${source}] [${quality}p] [${fileSize}]`;
+
+    return {
+      quality,
+      fileSize,
+      title,
+      source
+    };
+  }
+
+  /**
+   * Extract quality from text
+   */
+  extractQualityFromText(text) {
+    const qualityMap = {
+      '4k': 2160,
+      '2160p': 2160,
+      '1080p': 1080,
+      '1080': 1080,
+      'fullhd': 1080,
+      'fhd': 1080,
+      '720p': 720,
+      '720': 720,
+      'hd': 720,
+      '480p': 480,
+      'sd': 480,
+      '360p': 360,
+    };
+
+    const textLower = String(text).toLowerCase();
+
+    for (const [key, value] of Object.entries(qualityMap)) {
+      if (textLower.includes(key)) {
+        return value;
+      }
+    }
+
+    // Try regex pattern
+    const match = textLower.match(/(\d{3,4})p?/);
+    if (match) {
+      return parseInt(match[1]);
+    }
+
+    return 720; // Default
   }
 }
 
