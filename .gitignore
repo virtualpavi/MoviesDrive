@@ -2,10 +2,8 @@
 node_modules/
 package-lock.json
 
-# Environment
-.env
-.env.*
-!.env.example
+# Environment (local overrides)
+.env.local
 
 # Logs
 *.log
