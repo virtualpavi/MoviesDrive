@@ -18,6 +18,7 @@ name = "moviesdrive-addon"
 [env.production.vars]
 NODE_ENV = "production"
 MOVIESDRIVE_API = "https://new1.moviesdrive.surf"
+API_CONFIG_URL = "https://raw.githubusercontent.com/SaurabhKaperwan/Utils/refs/heads/main/urls.json"
 CACHE_TTL = "7200"
 REQUEST_TIMEOUT = "15000"
 MAX_CONCURRENT_REQUESTS = "5"
@@ -29,6 +30,7 @@ name = "moviesdrive-addon-dev"
 [env.development.vars]
 NODE_ENV = "development"
 MOVIESDRIVE_API = "https://new1.moviesdrive.surf"
+API_CONFIG_URL = "https://raw.githubusercontent.com/SaurabhKaperwan/Utils/refs/heads/main/urls.json"
 CACHE_TTL = "3600"
 REQUEST_TIMEOUT = "10000"
 

@@ -68,6 +68,7 @@ function initEnv(env) {
       CACHE_TTL: env.CACHE_TTL || '7200',
       REQUEST_TIMEOUT: env.REQUEST_TIMEOUT || '15000',
       MOVIESDRIVE_API: env.MOVIESDRIVE_API || 'https://new1.moviesdrive.surf',
+      API_CONFIG_URL: env.API_CONFIG_URL || '',
     });
   }
   

@@ -16,10 +16,64 @@ class MoviesDriveScraper {
     this.extractors = new SourceExtractors();
     this.subtitles = new SubtitlesExtractor();
     this.apiUrl = process.env.MOVIESDRIVE_API || 'https://new1.moviesdrive.surf';
+    this.configUrl = process.env.API_CONFIG_URL;
     this.cache = new CacheManager({
       ttl: (process.env.CACHE_TTL || 3600) * 1000, // Convert to ms
       maxSize: 500,
     });
+    this.apiUrlFetched = false;
+    
+    // Fetch dynamic URL if config is provided
+    if (this.configUrl) {
+      this.fetchApiUrl().catch(err => {
+        console.warn('[MoviesDrive] Failed to fetch config URL, using fallback:', err.message);
+      });
+    }
+  }
+
+  /**
+   * Fetch MoviesDrive API URL from remote config
+   * @returns {Promise<void>}
+   */
+  async fetchApiUrl() {
+    if (this.apiUrlFetched) return;
+    
+    const cacheKey = 'config:moviesdrive-url';
+    const cached = this.cache.get(cacheKey);
+    
+    if (cached?.url) {
+      this.apiUrl = cached.url;
+      this.apiUrlFetched = true;
+      console.log('[MoviesDrive] Using cached API URL:', this.apiUrl);
+      return;
+    }
+    
+    try {
+      console.log('[MoviesDrive] Fetching API URL from:', this.configUrl);
+      const response = await this.http.get(this.configUrl, { timeout: 5000 });
+      const config = JSON.parse(response.text);
+      
+      if (config.moviesdrive) {
+        this.apiUrl = config.moviesdrive;
+        this.apiUrlFetched = true;
+        // Cache for 1 hour
+        this.cache.set(cacheKey, { url: this.apiUrl }, 3600000);
+        console.log('[MoviesDrive] Updated API URL to:', this.apiUrl);
+      }
+    } catch (error) {
+      console.error('[MoviesDrive] Error fetching config URL:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Ensure API URL is fetched before making requests
+   * @returns {Promise<void>}
+   */
+  async ensureApiUrl() {
+    if (this.configUrl && !this.apiUrlFetched) {
+      await this.fetchApiUrl();
+    }
   }
 
   /**
@@ -624,6 +678,8 @@ class MoviesDriveScraper {
    */
   async searchAndGetDocument(imdbId, season) {
     try {
+      await this.ensureApiUrl();
+      
       // Check cache first
       const cacheKey = season ? `search:${imdbId}:S${season}` : `search:${imdbId}`;
       const cached = this.cache.get(cacheKey);
