@@ -46,7 +46,7 @@ function initScraper() {
 /**
  * Main handler
  */
-export async function handler(event) {
+export const handler = async (event) => {
   initScraper();
   
   const path = event.path.replace('/.netlify/functions/addon', '');
@@ -190,4 +190,7 @@ export async function handler(event) {
       body: JSON.stringify({ error: 'Internal server error' }),
     };
   }
-}
+};
+
+// For CommonJS compatibility
+export default handler;
