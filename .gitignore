@@ -35,3 +35,8 @@ coverage/
 tmp/
 temp/
 *.tmp
+
+# Cloudflare Workers
+.wrangler/
+wrangler.toml.bak
+worker-configuration.d.ts

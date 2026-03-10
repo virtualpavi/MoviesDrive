@@ -2,6 +2,27 @@
 
 Stremio addon for MoviesDrive streams (movies + series), including multi-resolution extraction and HubCloud chain resolution.
 
+## 🚀 Deployment
+
+### Cloudflare Workers (Recommended)
+
+This addon deploys automatically from GitHub to Cloudflare Workers.
+
+**⚡ Quick Start:** See [QUICKSTART.md](QUICKSTART.md) - 3 minutes total!
+
+**📖 Full Guide:** See [GITHUB_DEPLOY.md](GITHUB_DEPLOY.md) for details
+
+**How it works:**
+1. Push code to GitHub
+2. Connect repo in Cloudflare Dashboard (one-time)
+3. Done! Every push auto-deploys
+
+**Benefits:**
+- ⚡ 10-500x faster than traditional hosting
+- 🌍 300+ edge locations worldwide  
+- 💰 100k free requests/day
+- 🔄 Automatic deployments (just push to GitHub!)
+
 ## Requirements
 - Node.js `20+`
 - npm `9+`

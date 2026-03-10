@@ -1,11 +1,13 @@
 /**
  * HTTP Client with Cloudflare bypass, SSRF protection, and caching
  * Provides request functionality with proper headers and timeout handling
+ * Compatible with Cloudflare Workers (uses fetch API)
  */
 
-import axios from 'axios';
-import { setTimeout } from 'timers/promises';
 import { isValidUrl, sanitizeForLogging } from './security.js';
+
+// Polyfill for setTimeout as promise
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 class HttpClient {
   constructor(options = {}) {
@@ -15,53 +17,37 @@ class HttpClient {
       process.env.USER_AGENT ||
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
-    this.client = axios.create({
-      timeout: this.timeout,
-      headers: {
-        'User-Agent': this.userAgent,
-        Accept: '*/*',
-        'Accept-Encoding': 'gzip, deflate',
-        'Accept-Language': 'en-US,en;q=0.9',
-      },
-      maxRedirects: 10, // Allow following redirects
-      validateStatus: () => true, // Don't throw on any status
-    });
+    this.defaultHeaders = {
+      'User-Agent': this.userAgent,
+      'Accept': '*/*',
+      'Accept-Encoding': 'gzip, deflate',
+      'Accept-Language': 'en-US,en;q=0.9',
+    };
+  }
 
-    // Add request interceptor for SSRF protection
-    this.client.interceptors.request.use(
-      (config) => {
-        // Validate URL before making request
-        if (!isValidUrl(config.url)) {
-          throw new Error(`SSRF: Blocked request to ${sanitizeForLogging(config.url)}`);
-        }
-        return config;
-      },
-      (error) => {
-        return Promise.reject(error);
-      }
-    );
+  /**
+   * Fetch with timeout
+   */
+  async fetchWithTimeout(url, options = {}) {
+    const timeout = options.timeout || this.timeout;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
 
-    // Add response interceptor for error handling and SSRF protection
-    this.client.interceptors.response.use(
-      (response) => {
-        // Validate the final URL after redirects
-        const finalUrl = response.request?.res?.responseUrl || 
-                        response.config?.url || 
-                        response.request?.path;
-        
-        if (finalUrl && !isValidUrl(finalUrl)) {
-          throw new Error(`SSRF: Blocked redirect to ${sanitizeForLogging(finalUrl)}`);
-        }
-        
-        return response;
-      },
-      (error) => {
-        if (error.response?.status === 403) {
-          console.error('[HttpClient] Cloudflare protection detected');
-        }
-        return Promise.reject(error);
+    try {
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal,
+        redirect: 'follow', // Follow redirects automatically
+      });
+      clearTimeout(timeoutId);
+      return response;
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error.name === 'AbortError') {
+        throw new Error(`Request timeout after ${timeout}ms`);
       }
-    );
+      throw error;
+    }
   }
 
   async get(url, options = {}) {
@@ -71,45 +57,28 @@ class HttpClient {
     }
 
     try {
-      const response = await this.client.get(url, {
-        ...options,
+      const response = await this.fetchWithTimeout(url, {
+        method: 'GET',
+        headers: {
+          ...this.defaultHeaders,
+          ...(options.headers || {}),
+        },
         timeout: options.timeout || this.timeout,
       });
-      
-      // Get the final URL after all redirects - try multiple methods
-      let finalUrl = url;
-      
-      // Method 1: From response.request.res.responseUrl (most reliable for redirects)
-      if (response.request?.res?.responseUrl) {
-        finalUrl = response.request.res.responseUrl;
-      }
-      // Method 2: From response.config.url
-      else if (response.config?.url) {
-        finalUrl = response.config.url;
-      }
-      // Method 3: From response.request.path
-      else if (response.request?.path) {
-        finalUrl = response.request.path;
-      }
-      // Method 4: From response.headers.location (for redirect responses)
-      else if (response.headers?.location) {
-        finalUrl = response.headers.location;
-      }
 
-      // Validate final URL
-      if (!isValidUrl(finalUrl)) {
+      // Validate the final URL after redirects
+      const finalUrl = response.url;
+      
+      if (finalUrl && !isValidUrl(finalUrl)) {
         throw new Error(`SSRF: Blocked redirect to ${sanitizeForLogging(finalUrl)}`);
       }
-      
-      // Convert response.data to string if it's an object
-      const text = typeof response.data === 'string' 
-        ? response.data 
-        : JSON.stringify(response.data);
+
+      const text = await response.text();
       
       return {
         text: text,
         status: response.status,
-        headers: response.headers,
+        headers: Object.fromEntries(response.headers.entries()),
         url: finalUrl,
         finalUrl: finalUrl,
       };
@@ -126,20 +95,23 @@ class HttpClient {
     }
 
     try {
-      const response = await this.client.post(url, data, {
-        ...options,
+      const response = await this.fetchWithTimeout(url, {
+        method: 'POST',
+        headers: {
+          ...this.defaultHeaders,
+          'Content-Type': 'application/json',
+          ...(options.headers || {}),
+        },
+        body: typeof data === 'string' ? data : JSON.stringify(data),
         timeout: options.timeout || this.timeout,
       });
       
-      // Convert response.data to string if it's an object
-      const text = typeof response.data === 'string' 
-        ? response.data 
-        : JSON.stringify(response.data);
+      const text = await response.text();
       
       return {
         text: text,
         status: response.status,
-        headers: response.headers,
+        headers: Object.fromEntries(response.headers.entries()),
       };
     } catch (error) {
       console.error(`[HttpClient] Error posting to ${sanitizeForLogging(url)}:`, error.message);
@@ -153,7 +125,7 @@ class HttpClient {
         return await fn();
       } catch (error) {
         if (i === maxRetries - 1) throw error;
-        await setTimeout(delayMs * (i + 1)); // exponential backoff
+        await sleep(delayMs * (i + 1)); // exponential backoff
       }
     }
   }

@@ -1,9 +1,8 @@
 /**
  * Security Module
  * Provides SSRF protection, URL validation, and security utilities
+ * Compatible with Cloudflare Workers
  */
-
-import { URL } from 'url';
 
 // Private IP ranges that should be blocked
 const PRIVATE_IP_PATTERNS = [
