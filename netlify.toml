@@ -4,7 +4,7 @@
   publish = "public"
 
 [functions]
-  node_bundler = "nft"
+  node_bundler = "none"
   
 [[redirects]]
   from = "/manifest.json"
