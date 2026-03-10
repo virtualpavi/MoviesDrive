@@ -7,7 +7,6 @@
 import HttpClient from '../http-client.mjs';
 import SourceExtractors from '../utils.mjs';
 import SubtitlesExtractor from '../subtitles.mjs';
-import CacheManager from '../cache.mjs';
 import { load } from 'cheerio';
 
 class MoviesDriveScraper {
@@ -17,10 +16,6 @@ class MoviesDriveScraper {
     this.subtitles = new SubtitlesExtractor();
     this.apiUrl = process.env.MOVIESDRIVE_API || 'https://new1.moviesdrive.surf';
     this.configUrl = process.env.API_CONFIG_URL;
-    this.cache = new CacheManager({
-      ttl: (process.env.CACHE_TTL || 7200) * 1000, // Longer default: 2 hours
-      maxSize: 1000, // Increased from 500
-    });
     this.apiUrlFetched = false;
     
     // Fetch dynamic URL if config is provided
@@ -38,16 +33,6 @@ class MoviesDriveScraper {
   async fetchApiUrl() {
     if (this.apiUrlFetched) return;
     
-    const cacheKey = 'config:moviesdrive-url';
-    const cached = this.cache.get(cacheKey);
-    
-    if (cached?.url) {
-      this.apiUrl = cached.url;
-      this.apiUrlFetched = true;
-      console.log('[MoviesDrive] Using cached API URL:', this.apiUrl);
-      return;
-    }
-    
     try {
       console.log('[MoviesDrive] Fetching API URL from:', this.configUrl);
       const response = await this.http.get(this.configUrl, { timeout: 5000 });
@@ -56,8 +41,6 @@ class MoviesDriveScraper {
       if (config.moviesdrive) {
         this.apiUrl = config.moviesdrive;
         this.apiUrlFetched = true;
-        // Cache for 1 hour
-        this.cache.set(cacheKey, { url: this.apiUrl }, 3600000);
         console.log('[MoviesDrive] Updated API URL to:', this.apiUrl);
       }
     } catch (error) {
@@ -167,12 +150,6 @@ class MoviesDriveScraper {
    * @returns {Array<{titleFromH5: string, mdrivePageUrl: string, parsedQuality: number}>}
    */
   parseMovieDownloadBlocks($, cacheKey) {
-    // Check cache first
-    if (cacheKey) {
-      const cached = this.cache.get(`blocks:${cacheKey}`);
-      if (cached) return cached;
-    }
-    
     const blocks = [];
     const seen = new Set();
 
@@ -221,11 +198,6 @@ class MoviesDriveScraper {
       });
     });
 
-    // Cache the result
-    if (cacheKey) {
-      this.cache.set(`blocks:${cacheKey}`, blocks, 7200000); // 2 hours
-    }
-
     return blocks;
   }
 
@@ -238,14 +210,6 @@ class MoviesDriveScraper {
    * @returns {Promise<string|null>}
    */
   async extractHubCloudWrapperFromMdrive(mdrivePageUrl) {
-    // Check cache first
-    const cacheKey = `hubcloud:${mdrivePageUrl}`;
-    const cached = this.cache.get(cacheKey);
-    if (cached !== undefined) {
-      console.log(`[MoviesDrive] Cache hit for ${mdrivePageUrl}: ${cached ? 'found' : 'null'}`);
-      return cached;
-    }
-    
     try {
       console.log(`[MoviesDrive] Fetching HubCloud wrapper from ${mdrivePageUrl}`);
       const response = await this.http.get(mdrivePageUrl, { timeout: 20000 });
@@ -276,18 +240,15 @@ class MoviesDriveScraper {
           const hrefLower = href.toLowerCase();
           if (hrefLower.includes('hubcloud') && hrefLower.includes('/drive/')) {
             console.log(`[MoviesDrive] Found HubCloud wrapper: ${href}`);
-            this.cache.set(cacheKey, href, 7200000); // 2 hours
             return href;
           }
         }
       }
 
       console.log(`[MoviesDrive] No HubCloud wrapper found in ${mdrivePageUrl}`);
-      this.cache.set(cacheKey, null, 3600000); // 1 hour for null results
       return null;
     } catch (error) {
       console.error(`[MoviesDrive] Error getting hubcloud wrapper from ${mdrivePageUrl}:`, error.message);
-      this.cache.set(cacheKey, null, 1800000); // 30 min for errors
       return null;
     }
   }
@@ -378,12 +339,6 @@ class MoviesDriveScraper {
    * @returns {Promise<{rawFilename:string|null,cleanBaseTitle:string|null,fileSize:string|null}|null>}
    */
   async extractHubCloudDriveMetadata(wrapperUrl) {
-    const cacheKey = `hubmeta:${wrapperUrl}`;
-    const cached = this.cache.get(cacheKey);
-    if (cached) {
-      return cached.__missing ? null : cached;
-    }
-
     try {
       const response = await this.http.get(wrapperUrl, { timeout: 20000 });
       const textResponse = typeof response.text === 'string' ? response.text : JSON.stringify(response.text);
@@ -439,15 +394,12 @@ class MoviesDriveScraper {
       };
 
       if (!metadata.rawFilename && !metadata.cleanBaseTitle && !metadata.fileSize) {
-        this.cache.set(cacheKey, { __missing: true });
         return null;
       }
 
-      this.cache.set(cacheKey, metadata);
       return metadata;
     } catch (error) {
       console.error(`[MoviesDrive] Error extracting HubCloud metadata from ${wrapperUrl}:`, error.message);
-      this.cache.set(cacheKey, { __missing: true });
       return null;
     }
   }
@@ -705,14 +657,6 @@ class MoviesDriveScraper {
   async searchAndGetDocument(imdbId, season) {
     try {
       await this.ensureApiUrl();
-      
-      // Check cache first
-      const cacheKey = season ? `search:${imdbId}:S${season}` : `search:${imdbId}`;
-      const cached = this.cache.get(cacheKey);
-      if (cached) {
-        console.log(`[MoviesDrive] Cache hit for ${imdbId}${season ? ` S${season}` : ''}`);
-        return cached;
-      }
 
       // Search API
       const searchUrl = `${this.apiUrl}/searchapi.php?q=${imdbId}`;
@@ -804,9 +748,6 @@ class MoviesDriveScraper {
         html: contentText,
         $: $,
       };
-
-      // Cache the result
-      this.cache.set(cacheKey, result);
       
       return result;
     } catch (error) {
@@ -1099,20 +1040,6 @@ class MoviesDriveScraper {
       console.error(`[MoviesDrive] Error getting subtitles:`, error.message);
       return [];
     }
-  }
-
-  /**
-   * Clear cache
-   */
-  clearCache() {
-    this.cache.clearAll();
-  }
-
-  /**
-   * Get cache stats
-   */
-  getCacheStats() {
-    return this.cache.stats();
   }
 }
 
