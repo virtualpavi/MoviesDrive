@@ -5,9 +5,9 @@
  * wrapper URL -> redirect chain -> intermediate page -> extract final URLs
  */
 
-import HttpClient from './http-client.js';
+import HttpClient from './http-client.mjs';
 import { load } from 'cheerio';
-import { isValidUrl, sanitizeForLogging, isWrapperUrl } from './security.js';
+import { isValidUrl, sanitizeForLogging, isWrapperUrl } from './security.mjs';
 
 
 class LinkResolver {

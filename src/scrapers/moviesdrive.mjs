@@ -4,10 +4,10 @@
  * Uses extractors to get actual streaming URLs from hosting providers
  */
 
-import HttpClient from '../http-client.js';
-import SourceExtractors from '../utils.js';
-import SubtitlesExtractor from '../subtitles.js';
-import CacheManager from '../cache.js';
+import HttpClient from '../http-client.mjs';
+import SourceExtractors from '../utils.mjs';
+import SubtitlesExtractor from '../subtitles.mjs';
+import CacheManager from '../cache.mjs';
 import { load } from 'cheerio';
 
 class MoviesDriveScraper {
@@ -1013,7 +1013,6 @@ class MoviesDriveScraper {
           });
         }
       }
-    }
 
     // Highest resolution first, then larger file size, then FSL before Pixel.
     const serverPriority = { FSL: 2, Pixel: 1 };

@@ -9,8 +9,8 @@ import 'dotenv/config';
 import express from 'express';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
-import { securityHeaders, rateLimit, isValidImdbId, sanitizeString, isValidEpisodeNumber } from './security.js';
-import MoviesDriveScraper from './scrapers/moviesdrive.js';
+import { securityHeaders, rateLimit, isValidImdbId, sanitizeString, isValidEpisodeNumber } from './security.mjs';
+import MoviesDriveScraper from './scrapers/moviesdrive.mjs';
 import {
   serializeStreams,
   serializeCatalog,
@@ -18,7 +18,7 @@ import {
   parseSeasonEpisode,
   normalizeImdbId,
   parseSeriesRouteId,
-} from './serializer.js';
+} from './serializer.mjs';
 
 const require = createRequire(import.meta.url);
 const manifest = require('../manifest.json');

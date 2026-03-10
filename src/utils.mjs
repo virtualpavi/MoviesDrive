@@ -4,9 +4,9 @@
  * Based on CineStream's loadExtractor approach
  */
 
-import HttpClient from './http-client.js';
-import LinkResolver from './link-resolver.js';
-import { isWrapperUrl } from './security.js';
+import HttpClient from './http-client.mjs';
+import LinkResolver from './link-resolver.mjs';
+import { isWrapperUrl } from './security.mjs';
 import { load } from 'cheerio';
 
 class SourceExtractors {

@@ -3,14 +3,14 @@
  * Handles Stremio stream requests
  */
 
-import MoviesDriveScraper from '../scrapers/moviesdrive.js';
+import MoviesDriveScraper from '../scrapers/moviesdrive.mjs';
 import {
   serializeStreams,
   parseSeasonEpisode,
   normalizeImdbId,
   parseSeriesRouteId,
-} from '../serializer.js';
-import { isValidEpisodeNumber } from '../security.js';
+} from '../serializer.mjs';
+import { isValidEpisodeNumber } from '../security.mjs';
 
 class StreamHandler {
   constructor() {

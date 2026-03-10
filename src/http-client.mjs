@@ -4,7 +4,7 @@
  * Compatible with Cloudflare Workers (uses fetch API)
  */
 
-import { isValidUrl, sanitizeForLogging } from './security.js';
+import { isValidUrl, sanitizeForLogging } from './security.mjs';
 
 // Polyfill for setTimeout as promise
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
