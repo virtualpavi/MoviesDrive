@@ -18,8 +18,8 @@ class MoviesDriveScraper {
     this.apiUrl = process.env.MOVIESDRIVE_API || 'https://new1.moviesdrive.surf';
     this.configUrl = process.env.API_CONFIG_URL;
     this.cache = new CacheManager({
-      ttl: (process.env.CACHE_TTL || 3600) * 1000, // Convert to ms
-      maxSize: 500,
+      ttl: (process.env.CACHE_TTL || 7200) * 1000, // Longer default: 2 hours
+      maxSize: 1000, // Increased from 500
     });
     this.apiUrlFetched = false;
     
@@ -163,9 +163,16 @@ class MoviesDriveScraper {
    * <h5>Title...</h5>
    * <h5><a href="...">...</a></h5>
    * @param {Function} $ - Cheerio instance
+   * @param {string} cacheKey - Cache key for this parse
    * @returns {Array<{titleFromH5: string, mdrivePageUrl: string, parsedQuality: number}>}
    */
-  parseMovieDownloadBlocks($) {
+  parseMovieDownloadBlocks($, cacheKey) {
+    // Check cache first
+    if (cacheKey) {
+      const cached = this.cache.get(`blocks:${cacheKey}`);
+      if (cached) return cached;
+    }
+    
     const blocks = [];
     const seen = new Set();
 
@@ -214,6 +221,11 @@ class MoviesDriveScraper {
       });
     });
 
+    // Cache the result
+    if (cacheKey) {
+      this.cache.set(`blocks:${cacheKey}`, blocks, 7200000); // 2 hours
+    }
+
     return blocks;
   }
 
@@ -226,6 +238,11 @@ class MoviesDriveScraper {
    * @returns {Promise<string|null>}
    */
   async extractHubCloudWrapperFromMdrive(mdrivePageUrl) {
+    // Check cache first
+    const cacheKey = `hubcloud:${mdrivePageUrl}`;
+    const cached = this.cache.get(cacheKey);
+    if (cached !== undefined) return cached;
+    
     try {
       const response = await this.http.get(mdrivePageUrl, { timeout: 20000 });
       const textResponse = typeof response.text === 'string' ? response.text : JSON.stringify(response.text);
@@ -254,14 +271,17 @@ class MoviesDriveScraper {
 
           const hrefLower = href.toLowerCase();
           if (hrefLower.includes('hubcloud') && hrefLower.includes('/drive/')) {
+            this.cache.set(cacheKey, href, 7200000); // 2 hours
             return href;
           }
         }
       }
 
+      this.cache.set(cacheKey, null, 3600000); // 1 hour for null results
       return null;
     } catch (error) {
       console.error(`[MoviesDrive] Error getting hubcloud wrapper from ${mdrivePageUrl}:`, error.message);
+      this.cache.set(cacheKey, null, 1800000); // 30 min for errors
       return null;
     }
   }
@@ -804,7 +824,7 @@ class MoviesDriveScraper {
     const { $ } = result;
     const allStreams = [];
 
-    const resolutionBlocks = this.parseMovieDownloadBlocks($);
+    const resolutionBlocks = this.parseMovieDownloadBlocks($, imdbId);
     console.log(`[MoviesDrive] Found ${resolutionBlocks.length} movie resolution block(s) for ${imdbId}`);
 
     for (const block of resolutionBlocks) {
@@ -908,11 +928,10 @@ class MoviesDriveScraper {
     const { $, document } = result;
     const allStreams = [];
 
-    try {
-      const seriesBlocks = this.parseSeriesSingleEpisodeBlocks($, season);
-      console.log(`[MoviesDrive] Found ${seriesBlocks.length} series resolution block(s) for S${season}`);
+    const seriesBlocks = this.parseSeriesSingleEpisodeBlocks($, season);
+    console.log(`[MoviesDrive] Found ${seriesBlocks.length} series resolution block(s) for S${season}`);
 
-      for (const block of seriesBlocks) {
+    for (const block of seriesBlocks) {
         console.log(`[MoviesDrive] Processing ${block.quality}p archive: ${block.mdriveArchiveUrl}`);
         const episodeData = await this.extractEpisodeHubCloudFromArchive(block.mdriveArchiveUrl, episode);
 
@@ -994,8 +1013,6 @@ class MoviesDriveScraper {
           });
         }
       }
-    } catch (error) {
-      console.error(`[MoviesDrive] Error extracting series:`, error.message);
     }
 
     // Highest resolution first, then larger file size, then FSL before Pixel.
