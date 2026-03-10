@@ -1,11 +1,11 @@
 [build]
-  command = "npm install"
+  command = "npm install && npm install --save-dev @netlify/esbuild"
   functions = "netlify/functions"
   publish = "public"
 
 [functions]
   node_bundler = "esbuild"
-  included_files = ["src/**"]
+  external_node_modules = []
   
 [[redirects]]
   from = "/manifest.json"
