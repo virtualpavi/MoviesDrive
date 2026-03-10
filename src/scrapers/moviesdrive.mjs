@@ -241,9 +241,13 @@ class MoviesDriveScraper {
     // Check cache first
     const cacheKey = `hubcloud:${mdrivePageUrl}`;
     const cached = this.cache.get(cacheKey);
-    if (cached !== undefined) return cached;
+    if (cached !== undefined) {
+      console.log(`[MoviesDrive] Cache hit for ${mdrivePageUrl}: ${cached ? 'found' : 'null'}`);
+      return cached;
+    }
     
     try {
+      console.log(`[MoviesDrive] Fetching HubCloud wrapper from ${mdrivePageUrl}`);
       const response = await this.http.get(mdrivePageUrl, { timeout: 20000 });
       const textResponse = typeof response.text === 'string' ? response.text : JSON.stringify(response.text);
       const $ = load(textResponse);
@@ -271,12 +275,14 @@ class MoviesDriveScraper {
 
           const hrefLower = href.toLowerCase();
           if (hrefLower.includes('hubcloud') && hrefLower.includes('/drive/')) {
+            console.log(`[MoviesDrive] Found HubCloud wrapper: ${href}`);
             this.cache.set(cacheKey, href, 7200000); // 2 hours
             return href;
           }
         }
       }
 
+      console.log(`[MoviesDrive] No HubCloud wrapper found in ${mdrivePageUrl}`);
       this.cache.set(cacheKey, null, 3600000); // 1 hour for null results
       return null;
     } catch (error) {
