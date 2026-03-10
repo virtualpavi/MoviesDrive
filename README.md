@@ -1,30 +1,34 @@
 # MoviesDrive Stremio Addon
 
-Stremio addon for MoviesDrive streams (movies + series) - Built for **Cloudflare Workers**
+Stremio addon for MoviesDrive streams (movies + series) - Built for **Netlify Functions**
 
 Features:
 - 🎬 Multi-resolution stream extraction
 - 📺 Movies & TV Series support
 - 🔗 HubCloud chain resolution
-- ⚡ Edge-deployed on Cloudflare's global network
+- 🌐 Dynamic URL fetching from GitHub config
+- ⚡ Serverless deployment with auto-scaling
+- 🔒 Built-in security (SSRF protection, rate limiting)
 
-## 🚀 Deploy to Cloudflare
+## 🚀 Deploy to Netlify
 
 ### Automatic Deployment from GitHub
 
-**⚡ Quick Start:** See [QUICKSTART.md](QUICKSTART.md) - 3 minutes!
+**⚡ Quick Start:** See [NETLIFY_DEPLOY.md](NETLIFY_DEPLOY.md) for detailed instructions!
 
 **How it works:**
 1. Push code to GitHub
-2. Connect repo in Cloudflare Dashboard (one-time setup)
-3. Done! Every push auto-deploys to the edge
+2. Sign in to Netlify and import your repository
+3. Netlify auto-detects settings from `netlify.toml`
+4. Add environment variables in Netlify Dashboard
+5. Done! Every push auto-deploys
 
-**Why Cloudflare Workers:**
-- ⚡ ~1ms cold starts (10-500x faster than serverless functions)
-- 🌍 300+ edge locations worldwide  
-- 💰 100k free requests/day
-- 🔒 Built-in DDoS protection
+**Why Netlify Functions:**
+- ⚡ Fast cold starts with AWS Lambda backend
+- 🌍 Global CDN with edge caching
+- 💰 125k free invocations/month
 - 🔄 Automatic deployments from GitHub
+- 🚫 No CPU time limits (unlike Cloudflare Workers)
 
 ## Local Development
 
@@ -35,63 +39,62 @@ npm install
 # Run locally
 npm start
 # Runs at http://localhost:27828
-
-# Test as Cloudflare Worker
-npm run dev
-# Runs at http://localhost:8787
 ```
 
 ## Commands
 
 ```bash
 npm start       # Run local Node.js server
-npm run dev     # Run Cloudflare Workers dev server
-npm run deploy  # Deploy to Cloudflare Workers
-npm run logs    # View live logs from Cloudflare
+npm run deploy  # Deploy to Netlify (requires Netlify CLI)
 ```
 
 ## Endpoints
-- `GET /manifest.json`
-- `GET /health`
-- `GET /stream/:type/:id.json`
-- `GET /subtitles/:type/:id.json`
-- `GET /catalog/:type/:id.json`
-- `GET /meta/:type/:id.json`
+- `GET /manifest.json` - Addon manifest for Stremio
+- `GET /stream/:type/:id.json` - Stream extraction
+- `GET /subtitles/:type/:id.json` - Subtitle fetching
 
 Examples:
-- Movie: `/stream/movie/tt32820897.json`
-- Series tuple format: `/stream/series/tt14186672:1:1.json`
-
-## One-Click Vercel Deployment (GitHub Integration)
-1. Push this repo to GitHub.
-2. In Vercel, click **Add New Project**.
-3. Import `premiumytgemini/moviesdrive-stremio`.
-4. Framework Preset: **Other**.
-5. Root Directory: repository root.
-6. Click **Deploy**.
-
-No manual server start command is required on Vercel.
+- Movie: `/stream/movie/tt8205190.json`
+- Series: `/stream/series/tt32590226:3:32.json` (format: `imdbId:season:episode`)
 
 ## Environment Variables
-Optional (safe defaults exist):
-- `MOVIESDRIVE_API` (default: `https://new1.moviesdrive.surf`)
-- `CACHE_TTL` (default: `3600`)
-- `REQUEST_TIMEOUT` (default: `10000`)
-- `USER_AGENT`
 
-For Vercel, set them in **Project Settings > Environment Variables** if you need overrides.
+Set these in **Netlify Dashboard → Site settings → Environment variables**:
+
+**Required:**
+- `MOVIESDRIVE_API` - MoviesDrive base URL (e.g., `https://new1.moviesdrive.surf`)
+
+**Optional:**
+- `API_CONFIG_URL` - Dynamic URL config from GitHub (default: `https://raw.githubusercontent.com/SaurabhKaperwan/Utils/refs/heads/main/urls.json`)
+- `CACHE_TTL` - Cache duration in ms (default: `7200000` = 2 hours)
+- `REQUEST_TIMEOUT` - HTTP request timeout in ms (default: `30000` = 30 seconds)
 
 ## Quick Verification After Deploy
-Replace `<deployment>` with your Vercel URL:
+
+Replace `<your-site-name>` with your Netlify site name:
 
 ```bash
-curl "https://<deployment>/manifest.json"
-curl "https://<deployment>/health"
-curl "https://<deployment>/stream/movie/tt32820897.json"
-curl "https://<deployment>/stream/series/tt14186672:1:1.json"
+curl "https://<your-site-name>.netlify.app/manifest.json"
+curl "https://<your-site-name>.netlify.app/stream/movie/tt8205190.json"
+curl "https://<your-site-name>.netlify.app/stream/series/tt32590226:3:32.json"
 ```
 
 Expected:
 - `manifest.json` returns valid addon manifest
-- `health` returns `{"status":"ok",...}`
-- stream endpoints return `{"streams":[...]}` (may be empty if upstream source is unavailable)
+- Stream endpoints return `{"streams":[...]}` with available streams
+
+## Adding to Stremio
+
+1. Deploy to Netlify
+2. Copy your addon URL: `https://<your-site-name>.netlify.app/manifest.json`
+3. In Stremio, go to **Addons** → **Community Addons**
+4. Paste your URL and click **Install**
+
+## Architecture
+
+- **Runtime:** Node.js 20+ with ES modules
+- **Platform:** Netlify Functions (AWS Lambda)
+- **Scraping:** Cheerio for HTML parsing
+- **Caching:** In-memory cache with TTL
+- **Security:** SSRF protection, rate limiting (30 req/min), input validation
+- **Dynamic Config:** Fetches MoviesDrive URL from GitHub JSON with fallback
