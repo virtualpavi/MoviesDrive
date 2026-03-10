@@ -39,13 +39,13 @@ async function initScraper() {
     await import('dotenv/config');
     
     // Import ES modules dynamically
-    const securityModule = await import('../../src/security.js');
+    const securityModule = await import('../../src/security.mjs');
     isValidEpisodeNumber = securityModule.isValidEpisodeNumber;
     
-    const scraperModule = await import('../../src/scrapers/moviesdrive.js');
+    const scraperModule = await import('../../src/scrapers/moviesdrive.mjs');
     MoviesDriveScraper = scraperModule.default;
     
-    const serializerModule = await import('../../src/serializer.js');
+    const serializerModule = await import('../../src/serializer.mjs');
     serializeStreams = serializerModule.serializeStreams;
     parseSeasonEpisode = serializerModule.parseSeasonEpisode;
     normalizeImdbId = serializerModule.normalizeImdbId;
