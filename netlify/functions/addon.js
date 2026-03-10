@@ -204,5 +204,3 @@ exports.handler = async (event) => {
   }
 };
 
-// For CommonJS compatibility
-export default handler;
