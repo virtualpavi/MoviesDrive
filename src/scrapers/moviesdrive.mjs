@@ -18,6 +18,9 @@ class MoviesDriveScraper {
     this.configUrl = process.env.API_CONFIG_URL;
     this.apiUrlFetched = false;
     
+    console.log('[MoviesDrive] Constructor - API URL:', this.apiUrl);
+    console.log('[MoviesDrive] Constructor - Config URL:', this.configUrl);
+    
     // Fetch dynamic URL if config is provided
     if (this.configUrl) {
       this.fetchApiUrl().catch(err => {
