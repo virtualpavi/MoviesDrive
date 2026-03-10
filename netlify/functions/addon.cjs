@@ -73,6 +73,27 @@ exports.handler = async (event) => {
   }
 
   try {
+    // Debug endpoint
+    if (path === '/debug' || path === '/.netlify/functions/addon/debug') {
+      return {
+        statusCode: 200,
+        headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          env: {
+            MOVIESDRIVE_API: process.env.MOVIESDRIVE_API || 'NOT SET',
+            API_CONFIG_URL: process.env.API_CONFIG_URL || 'NOT SET',
+            REQUEST_TIMEOUT: process.env.REQUEST_TIMEOUT || 'NOT SET',
+          },
+          scraper: scraper ? {
+            apiUrl: scraper.apiUrl,
+            configUrl: scraper.configUrl,
+            apiUrlFetched: scraper.apiUrlFetched,
+          } : 'not initialized',
+          timestamp: new Date().toISOString(),
+        }),
+      };
+    }
+    
     // Health check
     if (path === '/health' || path === '/.netlify/functions/addon/health') {
       return {
