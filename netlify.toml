@@ -4,7 +4,8 @@
   publish = "public"
 
 [functions]
-  node_bundler = "none"
+  node_bundler = "esbuild"
+  included_files = ["src/**"]
   
 [[redirects]]
   from = "/manifest.json"
