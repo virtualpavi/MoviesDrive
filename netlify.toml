@@ -4,8 +4,7 @@
   publish = "public"
 
 [functions]
-  node_bundler = "esbuild"
-  external_node_modules = ["express", "cheerio", "dotenv", "cors"]
+  node_bundler = "nft"
   
 [[redirects]]
   from = "/manifest.json"
