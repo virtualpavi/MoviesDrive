@@ -1,16 +1,15 @@
 /**
- * Netlify Function for MoviesDrive Stremio Addon
+ * Netlify Function for MoviesDrive Stremio Addon (CommonJS)
  */
 
-import 'dotenv/config';
-import { isValidEpisodeNumber } from '../../src/security.js';
-import MoviesDriveScraper from '../../src/scrapers/moviesdrive.js';
-import {
-  serializeStreams,
-  parseSeasonEpisode,
-  normalizeImdbId,
-  parseSeriesRouteId,
-} from '../../src/serializer.js';
+// Use dynamic imports for ES modules
+let scraper;
+let isValidEpisodeNumber;
+let MoviesDriveScraper;
+let serializeStreams;
+let parseSeasonEpisode;
+let normalizeImdbId;
+let parseSeriesRouteId;
 
 // Manifest configuration
 const manifest = {
@@ -24,9 +23,6 @@ const manifest = {
   idPrefixes: ["tt"]
 };
 
-// Global scraper instance
-let scraper;
-
 // CORS headers
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -35,10 +31,26 @@ const CORS_HEADERS = {
 };
 
 /**
- * Initialize scraper
+ * Initialize modules and scraper
  */
-function initScraper() {
+async function initScraper() {
   if (!scraper) {
+    // Load dotenv
+    await import('dotenv/config');
+    
+    // Import ES modules dynamically
+    const securityModule = await import('../../src/security.js');
+    isValidEpisodeNumber = securityModule.isValidEpisodeNumber;
+    
+    const scraperModule = await import('../../src/scrapers/moviesdrive.js');
+    MoviesDriveScraper = scraperModule.default;
+    
+    const serializerModule = await import('../../src/serializer.js');
+    serializeStreams = serializerModule.serializeStreams;
+    parseSeasonEpisode = serializerModule.parseSeasonEpisode;
+    normalizeImdbId = serializerModule.normalizeImdbId;
+    parseSeriesRouteId = serializerModule.parseSeriesRouteId;
+    
     scraper = new MoviesDriveScraper();
   }
 }
@@ -46,8 +58,8 @@ function initScraper() {
 /**
  * Main handler
  */
-export const handler = async (event) => {
-  initScraper();
+exports.handler = async (event) => {
+  await initScraper();
   
   const path = event.path.replace('/.netlify/functions/addon', '');
   
