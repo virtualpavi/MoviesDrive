@@ -1,9 +1,8 @@
 {
   "name": "moviesdrive-stremio-addon",
   "version": "1.0.0",
-  "description": "Stremio addon for MoviesDrive provider - Cloudflare Workers",
-  "main": "worker/index.js",
-  "type": "module",
+  "description": "Stremio addon for MoviesDrive provider - Netlify Functions",
+  "main": "src/index.js",
   "engines": {
     "node": ">=20.0.0"
   },
