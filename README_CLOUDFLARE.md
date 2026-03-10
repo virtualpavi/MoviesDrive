@@ -1,10 +1,10 @@
 # Cloudflare Workers Deployment Guide
 
-This guide will help you deploy your MoviesDrive Stremio addon to Cloudflare Workers via GitHub.
+This guide will help you deploy your MoviesDrive Stremio addon to Cloudflare Workers.
 
 ## Deployment Method
 
-This app is configured to deploy automatically from your GitHub repository using GitHub Actions. Every push to your main/master branch will trigger an automatic deployment to Cloudflare Workers.
+This app is built specifically for Cloudflare Workers and deploys automatically when you connect your GitHub repository to Cloudflare. No GitHub Actions or CI/CD configuration needed - Cloudflare handles everything.
 
 ## What Changed for Cloudflare Workers
 

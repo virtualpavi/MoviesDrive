@@ -1,41 +1,54 @@
 # MoviesDrive Stremio Addon
 
-Stremio addon for MoviesDrive streams (movies + series), including multi-resolution extraction and HubCloud chain resolution.
+Stremio addon for MoviesDrive streams (movies + series) - Built for **Cloudflare Workers**
 
-## 🚀 Deployment
+Features:
+- 🎬 Multi-resolution stream extraction
+- 📺 Movies & TV Series support
+- 🔗 HubCloud chain resolution
+- ⚡ Edge-deployed on Cloudflare's global network
 
-### Cloudflare Workers (Recommended)
+## 🚀 Deploy to Cloudflare
 
-This addon deploys automatically from GitHub to Cloudflare Workers.
+### Automatic Deployment from GitHub
 
-**⚡ Quick Start:** See [QUICKSTART.md](QUICKSTART.md) - 3 minutes total!
-
-**📖 Full Guide:** See [GITHUB_DEPLOY.md](GITHUB_DEPLOY.md) for details
+**⚡ Quick Start:** See [QUICKSTART.md](QUICKSTART.md) - 3 minutes!
 
 **How it works:**
 1. Push code to GitHub
-2. Connect repo in Cloudflare Dashboard (one-time)
-3. Done! Every push auto-deploys
+2. Connect repo in Cloudflare Dashboard (one-time setup)
+3. Done! Every push auto-deploys to the edge
 
-**Benefits:**
-- ⚡ 10-500x faster than traditional hosting
+**Why Cloudflare Workers:**
+- ⚡ ~1ms cold starts (10-500x faster than serverless functions)
 - 🌍 300+ edge locations worldwide  
 - 💰 100k free requests/day
-- 🔄 Automatic deployments (just push to GitHub!)
+- 🔒 Built-in DDoS protection
+- 🔄 Automatic deployments from GitHub
 
-## Requirements
-- Node.js `20+`
-- npm `9+`
+## Local Development
 
-## Local Run
 ```bash
-npm ci
+# Install dependencies
+npm install
+
+# Run locally
 npm start
+# Runs at http://localhost:27828
+
+# Test as Cloudflare Worker
+npm run dev
+# Runs at http://localhost:8787
 ```
 
-Server defaults:
-- Base URL: `http://localhost:27828`
-- Manifest: `http://localhost:27828/manifest.json`
+## Commands
+
+```bash
+npm start       # Run local Node.js server
+npm run dev     # Run Cloudflare Workers dev server
+npm run deploy  # Deploy to Cloudflare Workers
+npm run logs    # View live logs from Cloudflare
+```
 
 ## Endpoints
 - `GET /manifest.json`

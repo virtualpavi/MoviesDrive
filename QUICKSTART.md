@@ -30,6 +30,19 @@ Every time you push to GitHub, Cloudflare automatically redeploys!
 
 ---
 
+## Testing Locally (Optional)
+
+Before pushing to GitHub:
+
+```bash
+npm install
+npm run dev
+```
+
+Access at: http://localhost:8787
+
+---
+
 ## That's It!
 
 ```

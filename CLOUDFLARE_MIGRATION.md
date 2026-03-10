@@ -1,6 +1,6 @@
-# Cloudflare Workers Migration Summary
+# Cloudflare Workers Architecture
 
-## Changes Made to Your App
+## Application Structure
 
 ### 1. HTTP Client ([src/http-client.js](src/http-client.js))
 - ✅ Replaced `axios` with native `fetch` API
@@ -66,38 +66,18 @@ MoviesDrive/
 
 ## Quick Start
 
-### GitHub Deployment (Recommended)
+### Deploy from GitHub
 
 ```bash
-# 1. Set up GitHub secrets (see GITHUB_DEPLOY.md)
-#    - CLOUDFLARE_API_TOKEN
-#    - CLOUDFLARE_ACCOUNT_ID
-
-# 2. Push to GitHub
+# 1. Push to GitHub
 git add .
 git commit -m "Deploy to Cloudflare Workers"
 git push origin main
 
-# 3. Done! Automatic deployment via GitHub Actions
-```
+# 2. Connect in Cloudflare Dashboard
+#    https://dash.cloudflare.com/ → Workers & Pages → Create → Pages → Connect to Git
 
-### Manual Deployment (Alternative)
-
-```bash
-# 1. Install dependencies
-npm install
-
-# 2. Login to Cloudflare
-npx wrangler login
-
-# 3. Add your account ID to wrangler.toml
-# Get it from: https://dash.cloudflare.com/
-
-# 4. Test locally
-npm run cf:dev
-
-# 5. Deploy
-npm run cf:deploy:prod
+# 3. Done! Automatic deployment
 ```
 
 ## Testing Checklist
@@ -131,7 +111,8 @@ Set these in [wrangler.toml](wrangler.toml) or Cloudflare dashboard:
 
 ## Support
 
-- **GitHub deployment guide**: [GITHUB_DEPLOY.md](GITHUB_DEPLOY.md) ⭐ Recommended
-- Full deployment guide: [README_CLOUDFLARE.md](README_CLOUDFLARE.md)
+- **Quick setup guide**: [QUICKSTART.md](QUICKSTART.md) ⭐ 3 minutes
+- **GitHub deployment**: [GITHUB_DEPLOY.md](GITHUB_DEPLOY.md) 
+- **Full deployment guide**: [README_CLOUDFLARE.md](README_CLOUDFLARE.md)
 - Cloudflare Workers Docs: https://developers.cloudflare.com/workers/
 - Wrangler CLI Docs: https://developers.cloudflare.com/workers/wrangler/
