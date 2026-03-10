@@ -23,7 +23,7 @@ import {
 // Manifest configuration
 const manifest = {
   id: "community.moviesdrive",
-  version: "1.0.0",
+  version: "1.0.1",
   name: "MoviesDrive",
   description: "Stream movies and TV series from MoviesDrive",
   logo: "https://moviesdrive.world/wp-content/uploads/2021/01/cropped-favicon-192x192.png",
