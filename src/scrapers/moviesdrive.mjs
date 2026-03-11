@@ -777,7 +777,8 @@ class MoviesDriveScraper {
     const resolutionBlocks = this.parseMovieDownloadBlocks($, imdbId);
     console.log(`[MoviesDrive] Found ${resolutionBlocks.length} movie resolution block(s) for ${imdbId}`);
 
-    for (const block of resolutionBlocks) {
+    // Process all quality blocks in parallel for speed
+    const blockPromises = resolutionBlocks.map(async (block) => {
       try {
         console.log(`[MoviesDrive] Processing ${block.parsedQuality}p block: ${block.titleFromH5}`);
         console.log(`[MoviesDrive] Archive page: ${block.mdrivePageUrl}`);
@@ -785,7 +786,7 @@ class MoviesDriveScraper {
         const hubcloudWrapper = await this.extractHubCloudWrapperFromMdrive(block.mdrivePageUrl);
         if (!hubcloudWrapper) {
           console.log(`[MoviesDrive] No HubCloud wrapper found for ${block.mdrivePageUrl}, skipping (strict mode)`);
-          continue;
+          return [];
         }
 
         console.log(`[MoviesDrive] HubCloud wrapper: ${hubcloudWrapper}`);
@@ -793,9 +794,10 @@ class MoviesDriveScraper {
 
         if (!extractedStreams.length) {
           console.log(`[MoviesDrive] No final streams resolved from wrapper ${hubcloudWrapper}`);
-          continue;
+          return [];
         }
 
+        const blockStreams = [];
         for (const stream of extractedStreams) {
           const normalizedSource = this.normalizeMovieSource(stream);
           if (!normalizedSource) {
@@ -813,19 +815,84 @@ class MoviesDriveScraper {
             this.extractFileSizeFromText(block.titleFromH5) ||
             null;
 
-          allStreams.push({
+          // Format resolution for AIOStreams (480p, 720p, 1080p, 2160p)
+          const resolutionTag = block.parsedQuality === 2160 ? '2160p' :
+                                block.parsedQuality === 1080 ? '1080p' :
+                                block.parsedQuality === 720 ? '720p' :
+                                block.parsedQuality === 480 ? '480p' : `${block.parsedQuality}p`;
+
+          // Extract quality info from title (WEB-DL, BluRay, etc.)
+          const titleLower = block.titleFromH5.toLowerCase();
+          let qualityTag = 'WEB-DL'; // Default
+          if (titleLower.includes('bluray') || titleLower.includes('blu-ray')) {
+            qualityTag = titleLower.includes('remux') ? 'BluRay REMUX' : 'BluRay';
+          } else if (titleLower.includes('webrip')) {
+            qualityTag = 'WEBRip';
+          } else if (titleLower.includes('hdtv')) {
+            qualityTag = 'HDTV';
+          } else if (titleLower.includes('hdrip')) {
+            qualityTag = 'HDRip';
+          }
+
+          // Extract codec/encode info
+          let encodeTag = '';
+          if (titleLower.includes('hevc') || titleLower.includes('x265') || titleLower.includes('h265')) {
+            encodeTag = 'HEVC';
+          } else if (titleLower.includes('x264') || titleLower.includes('h264') || titleLower.includes('avc')) {
+            encodeTag = 'AVC';
+          } else if (titleLower.includes('av1')) {
+            encodeTag = 'AV1';
+          }
+
+          // Extract visual tags
+          let visualTag = '';
+          if (titleLower.includes('hdr10+')) {
+            visualTag = 'HDR10+';
+          } else if (titleLower.includes('hdr10')) {
+            visualTag = 'HDR10';
+          } else if (titleLower.includes('dolby vision') || titleLower.includes('dv')) {
+            visualTag = 'DV';
+          } else if (titleLower.includes('hdr')) {
+            visualTag = 'HDR';
+          }
+
+          // Build AIOStreams-compatible title
+          // Format: [Quality] [Resolution] [Encode] [Visual] Release Name [Source]
+          const titleParts = [];
+          if (qualityTag) titleParts.push(qualityTag);
+          if (resolutionTag) titleParts.push(resolutionTag);
+          if (encodeTag) titleParts.push(encodeTag);
+          if (visualTag) titleParts.push(visualTag);
+          titleParts.push(block.titleFromH5);
+          if (normalizedSource) titleParts.push(`[${normalizedSource}]`);
+          if (fileSize) titleParts.push(`[${fileSize}]`);
+
+          const aioTitle = titleParts.join(' ');
+
+          blockStreams.push({
             ...stream,
             url: finalUrl,
             quality: block.parsedQuality,
             source: normalizedSource,
-            title: `${block.titleFromH5} [${normalizedSource}]`,
+            title: aioTitle,
+            name: aioTitle, // AIOStreams uses 'name' field
             fileSize,
             _sizeMb: this.parseFileSizeToMB(fileSize),
           });
         }
+        return blockStreams;
       } catch (error) {
         console.error(`[MoviesDrive] Error processing movie block ${block.mdrivePageUrl}:`, error.message);
+        return [];
       }
+    });
+
+    // Wait for all quality blocks to complete (in parallel)
+    const allBlockResults = await Promise.all(blockPromises);
+    
+    // Flatten results from all blocks
+    for (const blockStreams of allBlockResults) {
+      allStreams.push(...blockStreams);
     }
 
     // Sort by quality desc, then file size desc, then source preference, then URL.
@@ -943,14 +1010,60 @@ class MoviesDriveScraper {
             stream?.fileSize ||
             this.extractFileSizeFromText(stream?.title) ||
             inheritedFileSize;
-          const titleParts = [preferredBaseTitle];
-          if (!/\b(?:\d{3,4}p|4k)\b/i.test(preferredBaseTitle)) {
-            titleParts.push(`[${block.quality}p]`);
+
+          // Format resolution for AIOStreams
+          const qualityInt = parseInt(block.quality, 10) || 1080;
+          const resolutionTag = qualityInt === 2160 ? '2160p' :
+                                qualityInt === 1080 ? '1080p' :
+                                qualityInt === 720 ? '720p' :
+                                qualityInt === 480 ? '480p' : `${qualityInt}p`;
+
+          // Extract quality info from title
+          const titleLower = preferredBaseTitle.toLowerCase();
+          let qualityTag = 'WEB-DL';
+          if (titleLower.includes('bluray') || titleLower.includes('blu-ray')) {
+            qualityTag = titleLower.includes('remux') ? 'BluRay REMUX' : 'BluRay';
+          } else if (titleLower.includes('webrip')) {
+            qualityTag = 'WEBRip';
+          } else if (titleLower.includes('hdtv')) {
+            qualityTag = 'HDTV';
+          } else if (titleLower.includes('hdrip')) {
+            qualityTag = 'HDRip';
           }
-          if (fileSize) {
-            titleParts.push(`[${fileSize}]`);
+
+          // Extract codec
+          let encodeTag = '';
+          if (titleLower.includes('hevc') || titleLower.includes('x265') || titleLower.includes('h265')) {
+            encodeTag = 'HEVC';
+          } else if (titleLower.includes('x264') || titleLower.includes('h264') || titleLower.includes('avc')) {
+            encodeTag = 'AVC';
+          } else if (titleLower.includes('av1')) {
+            encodeTag = 'AV1';
           }
-          titleParts.push(`[${normalizedSource}]`);
+
+          // Extract visual tags
+          let visualTag = '';
+          if (titleLower.includes('hdr10+')) {
+            visualTag = 'HDR10+';
+          } else if (titleLower.includes('hdr10')) {
+            visualTag = 'HDR10';
+          } else if (titleLower.includes('dolby vision') || titleLower.includes('dv')) {
+            visualTag = 'DV';
+          } else if (titleLower.includes('hdr')) {
+            visualTag = 'HDR';
+          }
+
+          // Build AIOStreams-compatible title
+          const titleParts = [];
+          if (qualityTag) titleParts.push(qualityTag);
+          if (resolutionTag) titleParts.push(resolutionTag);
+          if (encodeTag) titleParts.push(encodeTag);
+          if (visualTag) titleParts.push(visualTag);
+          titleParts.push(preferredBaseTitle);
+          if (normalizedSource) titleParts.push(`[${normalizedSource}]`);
+          if (fileSize) titleParts.push(`[${fileSize}]`);
+
+          const aioTitle = titleParts.join(' ');
 
           allStreams.push({
             ...stream,
@@ -958,7 +1071,8 @@ class MoviesDriveScraper {
             quality: block.quality,
             source: normalizedSource,
             fileSize: fileSize || null,
-            title: titleParts.join(' '),
+            title: aioTitle,
+            name: aioTitle, // AIOStreams uses 'name' field
             _sizeMb: this.parseFileSizeToMB(fileSize),
           });
         }

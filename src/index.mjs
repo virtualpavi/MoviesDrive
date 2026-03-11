@@ -7,6 +7,7 @@
 
 import 'dotenv/config';
 import express from 'express';
+import cors from 'cors';
 import { createRequire } from 'module';
 import { fileURLToPath } from 'url';
 import { securityHeaders, rateLimit, isValidImdbId, sanitizeString, isValidEpisodeNumber } from './security.mjs';
@@ -25,6 +26,14 @@ const manifest = require('../manifest.json');
 
 // Initialize Express app
 const app = express();
+
+// CORS middleware - allow all origins for Stremio compatibility
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type'],
+  credentials: false
+}));
 
 // Security middleware
 app.use(securityHeaders);
@@ -274,7 +283,7 @@ app.use((req, res) => {
 
 if (isDirectExecution) {
   // Start server only when executed directly (not when imported by Vercel).
-  app.listen(PORT, HOST, () => {
+  const server = app.listen(PORT, HOST, () => {
     console.log('🎬 MoviesDrive Stremio Addon Server');
     console.log(`📡 Server running at http://${HOST}:${PORT}`);
     console.log(`📋 Manifest available at http://${HOST}:${PORT}/manifest.json`);
@@ -287,6 +296,11 @@ if (isDirectExecution) {
     console.log(`  Health:    http://${HOST}:${PORT}/health`);
     console.log('');
   });
+
+  // Increase server timeout to 60 seconds (scraping can take time)
+  server.timeout = 60000;
+  server.keepAliveTimeout = 65000;
+  server.headersTimeout = 66000;
 
   // Graceful shutdown
   process.on('SIGTERM', () => {

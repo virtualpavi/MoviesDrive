@@ -23,8 +23,20 @@ Thumbs.db
 # Build & Cache
 dist/
 .cache/
-.wrangler/
 
 # Temporary
 tmp/
 *.tmp
+
+# Debug & Test Files
+debug-*.js
+test-*.js
+test-*.cjs
+check-*.js
+
+# PowerShell Scripts
+*.ps1
+
+# Config Backups
+*-config-*.json
+aiostreamguide.txt

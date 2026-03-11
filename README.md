@@ -1,100 +1,143 @@
 # MoviesDrive Stremio Addon
 
-Stremio addon for MoviesDrive streams (movies + series) - Built for **Netlify Functions**
+Self-hosted Stremio addon for MoviesDrive streams - Delivers HTTP direct download links for movies and series.
 
-Features:
-- 🎬 Multi-resolution stream extraction
-- 📺 Movies & TV Series support
-- 🔗 HubCloud chain resolution
-- 🌐 Dynamic URL fetching from GitHub config
-- ⚡ Serverless deployment with auto-scaling
-- 🔒 Built-in security (SSRF protection, rate limiting)
+## ✨ Features
 
-## 🚀 Deploy to Netlify
+- 🎬 **Multi-resolution streams**: 480p, 720p, 1080p support
+- 📺 **Movies & TV Series**: Full season/episode support
+- ⚡ **Parallel scraping**: 3x faster performance (~3 seconds)
+- 🔗 **HubCloud resolution**: Automatic redirect chain following
+- 🌐 **Dynamic config**: Auto-fetches MoviesDrive URLs from GitHub
+- 🔒 **Security**: SSRF protection and rate limiting built-in
+- 🎯 **AIOStreams compatible**: Works with AIOStreams via passthrough mode
 
-### Automatic Deployment from GitHub
+## 🚀 Quick Start
 
-**⚡ Quick Start:** See [NETLIFY_DEPLOY.md](NETLIFY_DEPLOY.md) for detailed instructions!
-
-**How it works:**
-1. Push code to GitHub
-2. Sign in to Netlify and import your repository
-3. Netlify auto-detects settings from `netlify.toml`
-4. Add environment variables in Netlify Dashboard
-5. Done! Every push auto-deploys
-
-**Why Netlify Functions:**
-- ⚡ Fast cold starts with AWS Lambda backend
-- 🌍 Global CDN with edge caching
-- 💰 125k free invocations/month
-- 🔄 Automatic deployments from GitHub
-- 🚫 No CPU time limits (unlike Cloudflare Workers)
-
-## Local Development
+### Local Installation
 
 ```bash
 # Install dependencies
 npm install
 
-# Run locally
+# Run server
 npm start
-# Runs at http://localhost:27828
 ```
 
-## Commands
+Server runs at: `http://localhost:27828`
 
-```bash
-npm start       # Run local Node.js server
-npm run deploy  # Deploy to Netlify (requires Netlify CLI)
-```
+Add to Stremio: `http://localhost:27828/manifest.json`
 
-## Endpoints
-- `GET /manifest.json` - Addon manifest for Stremio
+### Deploy to Coolify
+
+1. **Push to Git Repository**:
+   ```bash
+   git add .
+   git commit -m "Initial commit"
+   git push origin main
+   ```
+
+2. **In Coolify Dashboard**:
+   - Create new resource → Git Repository
+   - Select your MoviesDrive repository
+   - Set build command: `npm install`
+   - Set start command: `npm start`
+   - Set port: `27828`
+   - Deploy!
+
+3. **Environment Variables** (optional):
+   - No environment variables required
+   - Config auto-fetches from GitHub
+
+## 📡 API Endpoints
+
+- `GET /manifest.json` - Stremio addon manifest
 - `GET /stream/:type/:id.json` - Stream extraction
-- `GET /subtitles/:type/:id.json` - Subtitle fetching
+- `GET /health` - Health check endpoint
 
-Examples:
-- Movie: `/stream/movie/tt8205190.json`
-- Series: `/stream/series/tt32590226:3:32.json` (format: `imdbId:season:episode`)
+### Examples
 
-## Environment Variables
-
-Set these in **Netlify Dashboard → Site settings → Environment variables**:
-
-**Required:**
-- `MOVIESDRIVE_API` - MoviesDrive base URL (e.g., `https://new1.moviesdrive.surf`)
-
-**Optional:**
-- `API_CONFIG_URL` - Dynamic URL config from GitHub (default: `https://raw.githubusercontent.com/SaurabhKaperwan/Utils/refs/heads/main/urls.json`)
-- `CACHE_TTL` - Cache duration in ms (default: `7200000` = 2 hours)
-- `REQUEST_TIMEOUT` - HTTP request timeout in ms (default: `30000` = 30 seconds)
-
-## Quick Verification After Deploy
-
-Replace `<your-site-name>` with your Netlify site name:
-
-```bash
-curl "https://<your-site-name>.netlify.app/manifest.json"
-curl "https://<your-site-name>.netlify.app/stream/movie/tt8205190.json"
-curl "https://<your-site-name>.netlify.app/stream/series/tt32590226:3:32.json"
+**Movie:**
+```
+GET /stream/movie/tt8205190.json
 ```
 
-Expected:
-- `manifest.json` returns valid addon manifest
-- Stream endpoints return `{"streams":[...]}` with available streams
+**TV Series:**
+```
+GET /stream/series/tt32590226:3:32.json
+Format: imdbId:season:episode
+```
 
-## Adding to Stremio
+## 🔧 Configuration
 
-1. Deploy to Netlify
-2. Copy your addon URL: `https://<your-site-name>.netlify.app/manifest.json`
-3. In Stremio, go to **Addons** → **Community Addons**
-4. Paste your URL and click **Install**
+No environment variables required! Config auto-fetches from:
+```
+https://raw.githubusercontent.com/SaurabhKaperwan/Utils/refs/heads/main/urls.json
+```
 
-## Architecture
+### Optional Environment Variables
 
-- **Runtime:** Node.js 20+ with ES modules
-- **Platform:** Netlify Functions (AWS Lambda)
-- **Scraping:** Cheerio for HTML parsing
-- **Caching:** In-memory cache with TTL
-- **Security:** SSRF protection, rate limiting (30 req/min), input validation
-- **Dynamic Config:** Fetches MoviesDrive URL from GitHub JSON with fallback
+Create `.env` file (see `.env.example`):
+
+```env
+# Optional overrides
+API_CONFIG_URL=https://your-config-url.json
+REQUEST_TIMEOUT=30000
+```
+
+## 🧪 Testing After Deployment
+
+```bash
+# Test manifest
+curl "https://your-domain.com/manifest.json"
+
+# Test movie stream
+curl "https://your-domain.com/stream/movie/tt8205190.json"
+
+# Test series stream
+curl "https://your-domain.com/stream/series/tt32590226:3:32.json"
+```
+
+Expected response: `{"streams": [...]}` with 6+ streams
+
+## 🎯 AIOStreams Integration
+
+Works with self-hosted AIOStreams using passthrough mode:
+
+### Prerequisites
+1. Self-hosted AIOStreams instance
+2. Enable in AIOStreams config:
+   - `RESULT_PASSTHROUGH=true`
+   - `FILTER_PASSTHROUGH=true`
+   - Allow HTTP streams
+
+### Add to AIOStreams
+In AIOStreams settings → Custom Scrapers:
+```
+http://localhost:27828/manifest.json
+```
+Or use your Coolify URL for remote access.
+
+## 🏗️ Architecture
+
+- **Runtime:** Node.js 20+ with ES modules (.mjs)
+- **HTTP Client:** Native fetch API
+- **HTML Parser:** Cheerio 1.0.0-rc.12
+- **Server:** Express 4.18.2 with CORS
+- **Performance:** Parallel scraping (~3 seconds)
+- **Security:** SSRF protection, input validation
+- **Dynamic Config:** Auto-fetches MoviesDrive URLs from GitHub
+
+## 📦 Stream Sources
+
+- **PixelDrain**: Direct HTTP downloads
+- **FSL Server**: Direct HTTP downloads (hub.raj.lat)
+- **Format**: AIOStreams-compatible metadata (quality, resolution, codec tags)
+
+## 📝 License
+
+MIT
+
+---
+
+**Note:** This addon provides HTTP direct download links. For use with AIOStreams, ensure passthrough mode is enabled.

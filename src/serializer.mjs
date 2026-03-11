@@ -41,13 +41,16 @@ export function serializeStreams(streams, imdbId) {
     return {
       url: stream.url,
       title: title,
+      name: stream.name || title, // AIOStreams uses 'name' field for parsing
       quality: `${quality}p`,
+      fileSize: stream.fileSize || null, // AIOStreams needs this
+      source: stream.source || null, // AIOStreams needs this
       sources: ['MoviesDrive'],
       externalUrl: stream.url,
       subtitles: [],
       behaviorHints: {
         bingeGroup: 'moviesdrive',
-        notWebReady: false,
+        notWebReady: true, // These are direct file downloads, not web-ready streams
       },
     };
   });
