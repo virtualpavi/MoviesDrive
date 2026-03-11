@@ -48,7 +48,8 @@ class MoviesDriveScraper {
       }
     } catch (error) {
       console.error('[MoviesDrive] Error fetching config URL:', error.message);
-      throw error;
+      console.warn('[MoviesDrive] Proceeding with fallback API URL:', this.apiUrl);
+      this.apiUrlFetched = true; // Prevent repeated failing requests
     }
   }
 
